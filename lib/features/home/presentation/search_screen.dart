@@ -6,7 +6,9 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/store/user_store.dart';
 import '../data/models/token_list_item_model.dart';
+import '../data/models/token_model.dart';
 import '../data/services/token_service.dart';
+import '../../../routes/app_routes.dart';
 
 class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key});
@@ -31,6 +33,22 @@ class _SearchScreenState extends State<SearchScreen> {
   int _offset = 0;
   String? _errorMessage;
   final List<TokenListItemModel> _results = [];
+
+  TokenModel _toTokenModel(TokenListItemModel item) {
+    final millis = item.time > 1000000000000 ? item.time : item.time * 1000;
+    return TokenModel(
+      symbol: item.symbol,
+      name: item.coin,
+      pair: '${item.coin} / USD',
+      imageUrl: '',
+      currentPrice: item.price,
+      decimals: item.decimals,
+      priceChange: 0,
+      priceChangePercentage: 0,
+      chartData: const <double>[],
+      lastUpdated: DateTime.fromMillisecondsSinceEpoch(millis),
+    );
+  }
 
   @override
   void initState() {
@@ -285,44 +303,52 @@ class _SearchScreenState extends State<SearchScreen> {
         }
 
         final token = _results[index];
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF121D33),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: Colors.white.withOpacity(0.06)),
-          ),
-          child: Row(
-            children: [
-              const Icon(
-                HugeIcons.strokeRoundedCoinsDollar,
-                color: AppColors.gray,
-                size: 20,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      token.symbol,
-                      style: const TextStyle(
-                        color: AppColors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    Text(
-                      token.coin,
-                      style: TextStyle(
-                        color: AppColors.white.withOpacity(0.6),
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
+        return GestureDetector(
+          onTap: () {
+            Navigator.of(context).pushNamed(
+              AppRoutes.tokenInfo,
+              arguments: _toTokenModel(token),
+            );
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF121D33),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.white.withOpacity(0.06)),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  HugeIcons.strokeRoundedCoinsDollar,
+                  color: AppColors.gray,
+                  size: 20,
                 ),
-              ),
-            ],
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        token.symbol,
+                        style: const TextStyle(
+                          color: AppColors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Text(
+                        token.coin,
+                        style: TextStyle(
+                          color: AppColors.white.withOpacity(0.6),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },

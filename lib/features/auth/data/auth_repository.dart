@@ -50,7 +50,11 @@ class AuthRepository {
       throw StateError('Missing GOOGLE_WEB_CLIENT_ID in .env');
     }
 
+    // On iOS, also provide the iOS client ID for proper initialization
+    final iosClientId = _isApplePlatform ? dotenv.env['GOOGLE_IOS_CLIENT_ID'] : null;
+
     return _googleInit ??= GoogleSignIn.instance.initialize(
+      clientId: iosClientId,
       serverClientId: serverClientId,
     );
   }
