@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    
+    <!-- Background circle -->
+    <path
+        android:fillColor="#1E293B"
+        android:pathData="M60,10 A50,50 0 1,1 60,110 A50,50 0 1,1 60,10 Z" />
+    
+    <!-- Border -->
+    <path
+        android:strokeColor="#3B82F6"
+        android:strokeWidth="2"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M60,10 A50,50 0 1,1 60,110 A50,50 0 1,1 60,10 Z" />
+    
+    <!-- Icon - scatter plot style -->
+    <path
+        android:fillColor="#3B82F6"
+        android:pathData="M42,45 A6,6 0 1,1 42,33 A6,6 0 1,1 42,45 Z" />
+    <path
+        android:fillColor="#3B82F6"
+        android:pathData="M60,58 A6,6 0 1,1 60,46 A6,6 0 1,1 60,58 Z" />
+    <path
+        android:fillColor="#3B82F6"
+        android:pathData="M78,50 A6,6 0 1,1 78,38 A6,6 0 1,1 78,50 Z" />
+    <path
+        android:fillColor="#3B82F6"
+        android:pathData="M48,70 A6,6 0 1,1 48,58 A6,6 0 1,1 48,70 Z" />
+    <path
+        android:fillColor="#3B82F6"
+        android:pathData="M72,75 A6,6 0 1,1 72,63 A6,6 0 1,1 72,75 Z" />
+</vector>
