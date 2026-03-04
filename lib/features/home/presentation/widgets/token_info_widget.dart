@@ -23,24 +23,13 @@ class TokenInfoWidget extends StatelessWidget {
         Container(
           width: iconSize,
           height: iconSize,
-          decoration: BoxDecoration(
-            color: const Color(0xFFFF9800),
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFFFF9800).withOpacity(0.3),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
           child: Center(
             child: imageUrl != null && imageUrl!.isNotEmpty
                 ? ClipOval(
                     child: Image.network(
                       imageUrl!,
-                      width: iconSize * 0.7,
-                      height: iconSize * 0.7,
+                      width: iconSize,
+                      height: iconSize,
                       fit: BoxFit.cover,
                       errorBuilder: (context, error, stackTrace) {
                         return _buildDefaultIcon();

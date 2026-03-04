@@ -8,7 +8,7 @@ class OpenAIRepository {
     final apiKey = dotenv.env['OPENAI_API_KEY'] ?? '';
     if (apiKey.isEmpty || apiKey.contains('your_openai_api_key_here')) {
       throw StateError(
-          'Vui lòng thêm OPENAI_API_KEY hợp lệ vào file .env');
+          'Please add a valid OPENAI_API_KEY to the .env file');
     }
     OpenAI.apiKey = apiKey;
   }
@@ -54,7 +54,7 @@ class OpenAIRepository {
         timestamp: DateTime.now(),
       );
     } catch (e) {
-      throw Exception('Lỗi khi gọi OpenAI: $e');
+      throw Exception('Error calling OpenAI: $e');
     }
   }
 
@@ -123,8 +123,50 @@ class OpenAIRepository {
           conversationHistory: conversationHistory,
         );
       } catch (fallbackError) {
-        throw Exception('Không thể kết nối với OpenAI. Vui lòng kiểm tra API key và kết nối internet. Chi tiết lỗi: $fallbackError');
+        throw Exception('Failed to connect to OpenAI. Please check your API key and internet connection. Error details: $fallbackError');
       }
+    }
+  }
+
+  /// Generate a short category name (≤40 chars) from the user's first message.
+  Future<String> generateCategoryName(String firstUserMessage) async {
+    try {
+      final response = await OpenAI.instance.chat.create(
+        model: 'gpt-4o-mini',
+        messages: [
+          OpenAIChatCompletionChoiceMessageModel(
+            role: OpenAIChatMessageRole.system,
+            content: [
+              OpenAIChatCompletionChoiceMessageContentItemModel.text(
+                'You are a naming assistant. '
+                'Step 1: Detect the language of the user message. '
+                'Step 2: Generate a short, descriptive chat category name STRICTLY in that same detected language. '
+                'Maximum 40 characters. '
+                'Return ONLY the category name — no explanation, no quotes, no punctuation at the end.',
+              ),
+            ],
+          ),
+          OpenAIChatCompletionChoiceMessageModel(
+            role: OpenAIChatMessageRole.user,
+            content: [
+              OpenAIChatCompletionChoiceMessageContentItemModel.text(
+                firstUserMessage,
+              ),
+            ],
+          ),
+        ],
+        temperature: 0.5,
+        maxTokens: 30,
+      );
+
+      final name =
+          (response.choices.first.message.content?.first.text ?? '').trim();
+      // Ensure max 40 chars
+      return name.length > 40 ? name.substring(0, 40) : name;
+    } catch (_) {
+      // Fallback: use first 40 chars of the message itself
+      final fallback = firstUserMessage.trim();
+      return fallback.length > 40 ? fallback.substring(0, 40) : fallback;
     }
   }
 }

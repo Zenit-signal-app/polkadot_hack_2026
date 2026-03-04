@@ -17,6 +17,12 @@
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
 		9BD86599E3464CF261CEB189 /* BuildFile in Frameworks */ = {isa = PBXBuildFile; };
+		C26E04B02F5734ED004C6C5C /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C26E04A22F5734ED004C6C5C /* AppDelegate.swift */; };
+		C26E04B12F5734ED004C6C5C /* GeneratedPluginRegistrant.m in Sources */ = {isa = PBXBuildFile; fileRef = C26E04A52F5734ED004C6C5C /* GeneratedPluginRegistrant.m */; };
+		C26E04B32F5734ED004C6C5C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C26E04A32F5734ED004C6C5C /* Assets.xcassets */; };
+		C26E04B42F5734ED004C6C5C /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = C26E04A62F5734ED004C6C5C /* GoogleService-Info.plist */; };
+		C26E04B52F5734ED004C6C5C /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = C26E04AB2F5734ED004C6C5C /* Main.storyboard */; };
+		C26E04B62F5734ED004C6C5C /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = C26E04A92F5734ED004C6C5C /* LaunchScreen.storyboard */; };
 		C2E72D8C2F535C6500EF0FF0 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = C2E72D8B2F535C6500EF0FF0 /* GoogleService-Info.plist */; };
 /* End PBXBuildFile section */
 
@@ -65,6 +71,17 @@
 		97C147001CF9000F007C117D /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		97C147021CF9000F007C117D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A3EEE4AC22B4A1D4569D48C6 /* Pods-RunnerTests.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.debug.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.debug.xcconfig"; sourceTree = "<group>"; };
+		C26E04A22F5734ED004C6C5C /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		C26E04A32F5734ED004C6C5C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C26E04A42F5734ED004C6C5C /* GeneratedPluginRegistrant.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GeneratedPluginRegistrant.h; sourceTree = "<group>"; };
+		C26E04A52F5734ED004C6C5C /* GeneratedPluginRegistrant.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = GeneratedPluginRegistrant.m; sourceTree = "<group>"; };
+		C26E04A62F5734ED004C6C5C /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
+		C26E04A72F5734ED004C6C5C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		C26E04A82F5734ED004C6C5C /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
+		C26E04AA2F5734ED004C6C5C /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
+		C26E04AC2F5734ED004C6C5C /* Runner.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Runner.entitlements; sourceTree = "<group>"; };
+		C26E04AD2F5734ED004C6C5C /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
+		C26E04AE2F5734ED004C6C5C /* RunnerDebug.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = RunnerDebug.entitlements; sourceTree = "<group>"; };
 		C2E72D822F53590200EF0FF0 /* Runner.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = Runner.xcodeproj; sourceTree = "<group>"; };
 		C2E72D8B2F535C6500EF0FF0 /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		C462A860D62358299A1EF9D4 /* Pods-Runner.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.debug.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"; sourceTree = "<group>"; };
@@ -114,6 +131,7 @@
 		97C146E51CF9000F007C117D = {
 			isa = PBXGroup;
 			children = (
+				C26E04AF2F5734ED004C6C5C /* Runner */,
 				9740EEB11CF90186004384FC /* Flutter */,
 				97C146F01CF9000F007C117D /* Runner */,
 				97C146EF1CF9000F007C117D /* Products */,
@@ -156,6 +174,24 @@
 				FFC97C6E1509550C7958F1DC /* Pods_Runner.framework */,
 			);
 			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		C26E04AF2F5734ED004C6C5C /* Runner */ = {
+			isa = PBXGroup;
+			children = (
+				C26E04A22F5734ED004C6C5C /* AppDelegate.swift */,
+				C26E04A32F5734ED004C6C5C /* Assets.xcassets */,
+				C26E04A42F5734ED004C6C5C /* GeneratedPluginRegistrant.h */,
+				C26E04A52F5734ED004C6C5C /* GeneratedPluginRegistrant.m */,
+				C26E04A62F5734ED004C6C5C /* GoogleService-Info.plist */,
+				C26E04A72F5734ED004C6C5C /* Info.plist */,
+				C26E04A92F5734ED004C6C5C /* LaunchScreen.storyboard */,
+				C26E04AB2F5734ED004C6C5C /* Main.storyboard */,
+				C26E04AC2F5734ED004C6C5C /* Runner.entitlements */,
+				C26E04AD2F5734ED004C6C5C /* Runner-Bridging-Header.h */,
+				C26E04AE2F5734ED004C6C5C /* RunnerDebug.entitlements */,
+			);
+			path = Runner;
 			sourceTree = "<group>";
 		};
 		C2E72D872F535A0600EF0FF0 /* Products */ = {
@@ -257,6 +293,9 @@
 				Base,
 			);
 			mainGroup = 97C146E51CF9000F007C117D;
+			packageReferences = (
+				C2C25E812F55CCB500B516E8 /* XCRemoteSwiftPackageReference "generative-ai-swift" */,
+			);
 			productRefGroup = 97C146EF1CF9000F007C117D /* Products */;
 			projectDirPath = "";
 			projectReferences = (
@@ -288,6 +327,10 @@
 				97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */,
 				3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */,
 				C2E72D8C2F535C6500EF0FF0 /* GoogleService-Info.plist in Resources */,
+				C26E04B32F5734ED004C6C5C /* Assets.xcassets in Resources */,
+				C26E04B42F5734ED004C6C5C /* GoogleService-Info.plist in Resources */,
+				C26E04B52F5734ED004C6C5C /* Main.storyboard in Resources */,
+				C26E04B62F5734ED004C6C5C /* LaunchScreen.storyboard in Resources */,
 				97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */,
 				97C146FC1CF9000F007C117D /* Main.storyboard in Resources */,
 			);
@@ -420,6 +463,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C26E04B02F5734ED004C6C5C /* AppDelegate.swift in Sources */,
+				C26E04B12F5734ED004C6C5C /* GeneratedPluginRegistrant.m in Sources */,
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 			);
@@ -450,6 +495,22 @@
 				97C147001CF9000F007C117D /* Base */,
 			);
 			name = LaunchScreen.storyboard;
+			sourceTree = "<group>";
+		};
+		C26E04A92F5734ED004C6C5C /* LaunchScreen.storyboard */ = {
+			isa = PBXVariantGroup;
+			children = (
+				C26E04A82F5734ED004C6C5C /* Base */,
+			);
+			name = LaunchScreen.storyboard;
+			sourceTree = "<group>";
+		};
+		C26E04AB2F5734ED004C6C5C /* Main.storyboard */ = {
+			isa = PBXVariantGroup;
+			children = (
+				C26E04AA2F5734ED004C6C5C /* Base */,
+			);
+			name = Main.storyboard;
 			sourceTree = "<group>";
 		};
 /* End PBXVariantGroup section */
@@ -498,7 +559,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
@@ -515,15 +576,15 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
-				DEVELOPMENT_TEAM = 93FJZ2VMS2;
+				DEVELOPMENT_TEAM = NY3KVTU63Z;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.vistia.zenit;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vistia.zenit-apps";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
@@ -541,7 +602,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.vistia.zenit.RunnerTests;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vistia.zenit-apps.RunnerTests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -559,7 +620,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.vistia.zenit.RunnerTests;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vistia.zenit-apps.RunnerTests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Runner.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Runner";
@@ -575,7 +636,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.vistia.zenit.RunnerTests;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vistia.zenit-apps.RunnerTests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Runner.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Runner";
@@ -631,7 +692,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
@@ -682,7 +743,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
@@ -701,15 +762,15 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = Runner/RunnerDebug.entitlements;
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
-				DEVELOPMENT_TEAM = 93FJZ2VMS2;
+				DEVELOPMENT_TEAM = NY3KVTU63Z;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.vistia.zenit;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vistia.zenit-apps";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -727,15 +788,15 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
-				DEVELOPMENT_TEAM = 93FJZ2VMS2;
+				DEVELOPMENT_TEAM = NY3KVTU63Z;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.vistia.zenit;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vistia.zenit-apps";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
@@ -778,6 +839,17 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		C2C25E812F55CCB500B516E8 /* XCRemoteSwiftPackageReference "generative-ai-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/google/generative-ai-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.5.6;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
 	};
 	rootObject = 97C146E61CF9000F007C117D /* Project object */;
 }

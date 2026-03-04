@@ -92,11 +92,17 @@ class LoadMoreTokens extends PriceEvent {
 
 class LoadTokenChartHistory extends PriceEvent {
   final String symbol;
+  final String? timeframe;
+  final int? limit;
 
-  const LoadTokenChartHistory({required this.symbol});
+  const LoadTokenChartHistory({
+    required this.symbol,
+    this.timeframe,
+    this.limit,
+  });
 
   @override
-  List<Object?> get props => [symbol];
+  List<Object?> get props => [symbol, timeframe, limit];
 }
 
 class ConnectionStatusChanged extends PriceEvent {

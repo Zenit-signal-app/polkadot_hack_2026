@@ -21,7 +21,7 @@ class ApiClient {
   ApiClient({http.Client? client, AuthLocalStorage? authLocalStorage})
       : _client = client ?? http.Client(),
         _authLocalStorage = authLocalStorage ?? AuthLocalStorage();
-
+  
   void setAuthToken(String? token) {
     _authToken = token;
   }
@@ -35,7 +35,6 @@ class ApiClient {
     if (_authToken != null) {
       headers['Authorization'] = 'Bearer $_authToken';
     }
-    
     return headers;
   }
 

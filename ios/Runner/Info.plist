@@ -29,7 +29,8 @@
 			<string>Editor</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>com.googleusercontent.apps.1061098133475-glk9tlln3i494bv8jetrhqqodgmbhqcq</string>
+				<string>com.googleusercontent.apps.1061098133475-9h3ad9jekho3u65o3dq047roo0v972ej</string>
+				<string>app-1-1061098133475-ios-942b8ec366dcc8637c72d6</string>
 			</array>
 		</dict>
 	</array>
@@ -74,6 +75,11 @@
 			</array>
 		</dict>
 	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>remote-notification</string>
+	</array>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>

@@ -7,6 +7,7 @@ import 'dart:io' show Platform;
 import '../../../../core/ads/admob_config.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/network/api_client.dart';
+import '../../../../core/store/favorite_store.dart';
 import '../../../../core/store/token_store.dart';
 import '../../../../core/store/user_store.dart';
 import '../../../../routes/app_routes.dart';
@@ -529,6 +530,9 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _favoriteSymbols = favoriteSymbols.toSet();
       });
+
+      // Sync to FavoriteStore so token_info_screen gets updated too
+      await context.read<FavoriteStore>().syncFavorites(favoriteSymbols);
     } catch (_) {
       if (!mounted) return;
       setState(() {

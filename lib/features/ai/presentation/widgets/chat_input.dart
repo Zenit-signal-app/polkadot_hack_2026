@@ -5,11 +5,15 @@ import '../../../../core/constants/app_colors.dart';
 class ChatInput extends StatefulWidget {
   final Function(String) onSend;
   final bool isLoading;
+  final String? categoryName;
+  final VoidCallback? onCategoryTap;
 
   const ChatInput({
     super.key,
     required this.onSend,
     this.isLoading = false,
+    this.categoryName,
+    this.onCategoryTap,
   });
 
   @override
@@ -93,50 +97,40 @@ class _ChatInputState extends State<ChatInput> {
               const SizedBox(height: 6),
               Row(
                 children: [
-                  Text(
-                    '...',
-                    style: TextStyle(
-                      color: AppColors.white.withOpacity(0.6),
-                      fontSize: 14,
-                    ),
-                  ),
-                  const Spacer(),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  Container(
-                    height: 24,
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    decoration: BoxDecoration(
-                      color: AppColors.blue,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.auto_awesome,
-                          color: AppColors.white,
-                          size: 12,
-                        ),
-                        const SizedBox(width: 4),
-                        const Text(
-                          'Ask AI',
-                          style: TextStyle(
+                  GestureDetector(
+                    onTap: widget.onCategoryTap,
+                    child: Container(
+                      height: 24,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      decoration: BoxDecoration(
+                        color: AppColors.blue,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.auto_awesome,
                             color: AppColors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
+                            size: 12,
                           ),
-                        ),
-                        const SizedBox(width: 2),
-                        Icon(
-                          Icons.keyboard_arrow_down_rounded,
-                          color: AppColors.white.withOpacity(0.9),
-                          size: 14,
-                        ),
-                      ],
+                          const SizedBox(width: 4),
+                          Text(
+                            widget.categoryName ?? 'Ask AI',
+                            style: const TextStyle(
+                              color: AppColors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          const SizedBox(width: 2),
+                          Icon(
+                            Icons.keyboard_arrow_down_rounded,
+                            color: AppColors.white.withOpacity(0.9),
+                            size: 14,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                   const Spacer(),

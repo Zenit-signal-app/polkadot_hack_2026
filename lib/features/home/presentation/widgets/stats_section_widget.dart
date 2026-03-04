@@ -4,11 +4,41 @@ import '../../data/models/token_model.dart';
 
 class StatsSectionWidget extends StatelessWidget {
   final TokenModel token;
+  final double? high;
+  final double? low;
+  final double? volume;
 
   const StatsSectionWidget({
     super.key,
     required this.token,
+    this.high,
+    this.low,
+    this.volume,
   });
+  
+  String _formatPrice(double? price) {
+    if (price == null) return '--';
+    if (price >= 1) {
+      return NumberFormat('\$#,##0.00').format(price);
+    } else if (price >= 0.0001) {
+      return NumberFormat('\$#,##0.0000').format(price);
+    } else {
+      return NumberFormat('\$#,##0.00000000').format(price);
+    }
+  }
+  
+  String _formatVolume(double? vol) {
+    if (vol == null) return '--';
+    if (vol >= 1000000000) {
+      return '${NumberFormat('#,##0.00').format(vol / 1000000000)}B';
+    } else if (vol >= 1000000) {
+      return '${NumberFormat('#,##0.00').format(vol / 1000000)}M';
+    } else if (vol >= 1000) {
+      return '${NumberFormat('#,##0.00').format(vol / 1000)}K';
+    } else {
+      return NumberFormat('#,##0.00').format(vol);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -16,60 +46,40 @@ class StatsSectionWidget extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Column(
         children: [
-          // Reference Price Row
+          // Current Price Row
           Row(
             children: [
               Expanded(
                 child: _buildStatItem(
-                  'Reference Price',
-                  NumberFormat('\$#,##0.0000').format(token.currentPrice * 0.999),
+                  'Current Price',
+                  _formatPrice(token.currentPrice),
                 ),
               ),
               const SizedBox(width: 16),
               Expanded(
                 child: _buildStatItem(
-                  'Reference Price',
-                  NumberFormat('\$#,##0.0000').format(token.currentPrice * 1.001),
+                  'Volume',
+                  _formatVolume(volume),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 16),
           
-          // 24h High/Low Row
+          // High/Low Row
           Row(
             children: [
               Expanded(
                 child: _buildStatItem(
-                  '24h High',
-                  NumberFormat('\$#,##0.0000').format(token.currentPrice * 1.05),
+                  'High',
+                  _formatPrice(high),
                 ),
               ),
               const SizedBox(width: 16),
               Expanded(
                 child: _buildStatItem(
-                  '24h Low',
-                  NumberFormat('\$#,##0.0000').format(token.currentPrice * 0.95),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          
-          // Volume Row
-          Row(
-            children: [
-              Expanded(
-                child: _buildStatItem(
-                  '24h Volume (SOL)',
-                  '400.000',
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: _buildStatItem(
-                  '24h Volume (USD)',
-                  '400.000',
+                  'Low',
+                  _formatPrice(low),
                 ),
               ),
             ],

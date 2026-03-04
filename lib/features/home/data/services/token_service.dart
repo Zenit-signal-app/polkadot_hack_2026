@@ -7,10 +7,20 @@ class TokenPriceHistoryResult {
   const TokenPriceHistoryResult({
     required this.prices,
     required this.latestTime,
+    this.high,
+    this.low,
+    this.volume,
+    this.open,
+    this.close,
   });
 
   final List<double> prices;
   final int? latestTime;
+  final double? high;
+  final double? low;
+  final double? volume;
+  final double? open;
+  final double? close;
 }
 
 class TokenService {
@@ -98,7 +108,11 @@ class TokenService {
           .map(
             (item) => (
               time: (item['time'] as num?)?.toInt() ?? 0,
+              open: (item['open'] as num?)?.toDouble(),
+              high: (item['high'] as num?)?.toDouble(),
+              low: (item['low'] as num?)?.toDouble(),
               close: (item['close'] as num?)?.toDouble(),
+              volume: (item['volume'] as num?)?.toDouble(),
             ),
           )
           .where((point) => point.close != null)
@@ -107,10 +121,40 @@ class TokenService {
 
       final prices = parsed.map((point) => point.close!).toList();
       final latestTime = parsed.isEmpty ? null : parsed.last.time;
+      
+      // Calculate aggregated stats from all candles
+      double? aggregatedHigh;
+      double? aggregatedLow;
+      double aggregatedVolume = 0;
+      double? firstOpen;
+      double? lastClose;
+      
+      for (final candle in parsed) {
+        if (candle.high != null) {
+          aggregatedHigh = aggregatedHigh == null 
+              ? candle.high 
+              : (candle.high! > aggregatedHigh ? candle.high : aggregatedHigh);
+        }
+        if (candle.low != null) {
+          aggregatedLow = aggregatedLow == null 
+              ? candle.low 
+              : (candle.low! < aggregatedLow ? candle.low : aggregatedLow);
+        }
+        if (candle.volume != null) {
+          aggregatedVolume += candle.volume!;
+        }
+        firstOpen ??= candle.open;
+        lastClose = candle.close;
+      }
 
       return TokenPriceHistoryResult(
         prices: prices,
         latestTime: latestTime,
+        high: aggregatedHigh,
+        low: aggregatedLow,
+        volume: aggregatedVolume,
+        open: firstOpen,
+        close: lastClose,
       );
     } catch (e, st) {
       log('TokenService.getPriceHistory error: $e', stackTrace: st);

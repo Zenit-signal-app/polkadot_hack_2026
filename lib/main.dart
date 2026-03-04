@@ -1,4 +1,5 @@
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -9,7 +10,10 @@ import 'dart:io' show Platform;
 
 import 'core/store/user_store.dart';
 import 'core/store/token_store.dart';
+import 'core/store/favorite_store.dart';
+import 'core/store/chat_store.dart';
 import 'core/constants/app_colors.dart';
+import 'core/services/notification_service.dart';
 import 'routes/app_router.dart';
 import 'routes/app_routes.dart';
 
@@ -20,6 +24,12 @@ Future<void> main() async {
   // Skip Firebase initialization on web until firebase_options.dart is generated
   if (!kIsWeb) {
     await Firebase.initializeApp();
+
+    // Register background message handler
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+    
+    // Initialize notification service
+    await NotificationService().initialize();
 
     if (Platform.isIOS) {
       final status =
@@ -64,6 +74,8 @@ class MyApp extends StatelessWidget {
         providers: [
           BlocProvider(create: (_) => UserStore()),
           BlocProvider(create: (_) => TokenStore()),
+          BlocProvider(create: (_) => FavoriteStore()),
+          BlocProvider(create: (_) => ChatStore()),
         ],
         child: const _AppRoot(),
       ),

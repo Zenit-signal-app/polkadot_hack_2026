@@ -1,10 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:google_sign_in/google_sign_in.dart';
-import 'package:sign_in_with_apple/sign_in_with_apple.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:flutter/foundation.dart';
 import 'dart:async';
-import 'dart:io' show Platform;
 
 import '../../../core/network/api_client.dart';
 import '../../../core/auth/auth_local_storage.dart';
@@ -37,121 +32,51 @@ class AuthRepository {
   final FirebaseAuth _auth;
   final ApiClient _apiClient;
   final AuthLocalStorage _authLocalStorage;
-  static Future<void>? _googleInit;
-  final _googleSignIn = GoogleSignIn.instance;
-  bool get _isApplePlatform =>
-      !kIsWeb &&
-      (defaultTargetPlatform == TargetPlatform.iOS ||
-          defaultTargetPlatform == TargetPlatform.macOS);
-
-  Future<void> _ensureGoogleInitialized() {
-    final serverClientId = dotenv.env['GOOGLE_WEB_CLIENT_ID'];
-    if (serverClientId == null || serverClientId.isEmpty) {
-      throw StateError('Missing GOOGLE_WEB_CLIENT_ID in .env');
-    }
-
-    // On iOS, also provide the iOS client ID for proper initialization
-    final iosClientId = _isApplePlatform ? dotenv.env['GOOGLE_IOS_CLIENT_ID'] : null;
-
-    return _googleInit ??= GoogleSignIn.instance.initialize(
-      clientId: iosClientId,
-      serverClientId: serverClientId,
-    );
-  }
 
   Future<UserAuthInfo> signInWithGoogle() async {
-    await _ensureGoogleInitialized();
-    GoogleSignInAccount googleUser;
+    final googleProvider = GoogleAuthProvider();
+    googleProvider.addScope('email');
+
+    UserCredential userCredential;
     try {
-      googleUser = await _googleSignIn.authenticate(scopeHint: ["email"]);
+      userCredential = await _auth.signInWithProvider(googleProvider);
     } catch (e) {
-      print(e);
+      print('Firebase Google sign-in error: $e');
       throw StateError('Google sign-in failed. Please try again. $e');
     }
-    print(googleUser);
 
-    final googleAuth = googleUser.authentication;
-    final idToken = googleAuth.idToken;
-    if (idToken == null || idToken.isEmpty) {
-      throw StateError('Missing Google ID token');
+    final user = userCredential.user;
+    if (user == null) {
+      throw StateError('Sign in failed: No user returned');
     }
 
-    final credential = GoogleAuthProvider.credential(idToken: idToken);
-
-    final userCredential = await _auth.signInWithCredential(credential);
-    final user = userCredential.user;
-    final token = await user?.getIdToken();
+    final refreshedUser = _auth.currentUser!;
+    final token = await refreshedUser.getIdToken();
     if (token == null || token.isEmpty) {
       throw StateError('Unable to fetch token');
     }
 
-    final exchanged = await _exchangeFirebaseLogin(
-      firebaseIdToken: token,
-      provider: 'google',
-      user: user,
-    );
-
-    return UserAuthInfo(
-      token: exchanged.accessToken,
-      refreshToken: exchanged.refreshToken,
-      email: exchanged.email ?? user?.email,
-      displayName: exchanged.displayName ?? user?.displayName,
-      photoURL: exchanged.photoURL ?? user?.photoURL,
-    );
-  }
-
-  Future<void> _resetFirebaseSessionOnly() async {
     try {
-      await _auth.signOut();
-    } catch (_) {}
-    await Future<void>.delayed(const Duration(milliseconds: 250));
-  }
+      final exchanged = await _exchangeFirebaseLogin(
+        firebaseIdToken: token,
+        provider: 'google',
+        user: refreshedUser,
+      );
 
-  Future<UserAuthInfo> signInWithApple() async {
-    final credential = await SignInWithApple.getAppleIDCredential(
-      scopes: [
-        AppleIDAuthorizationScopes.email,
-        AppleIDAuthorizationScopes.fullName,
-      ],
-    );
-
-    if (credential.identityToken == null) {
-      throw StateError('Missing identity token');
+      return UserAuthInfo(
+        token: exchanged.accessToken,
+        refreshToken: exchanged.refreshToken,
+        email: exchanged.email ?? refreshedUser.email,
+        displayName: exchanged.displayName ?? refreshedUser.displayName,
+        photoURL: exchanged.photoURL ?? refreshedUser.photoURL,
+      );
+    } on ApiException catch (e) {
+      print('Backend login error: ${e.statusCode} - ${e.message}');
+      throw StateError('Backend login failed: ${e.message}');
+    } catch (e) {
+      print('Exchange login error: $e');
+      rethrow;
     }
-
-    final oauthProvider = OAuthProvider('apple.com');
-    final authCredential = oauthProvider.credential(
-      idToken: credential.identityToken,
-      accessToken: credential.authorizationCode,
-    );
-
-    final userCredential = await _auth.signInWithCredential(authCredential);
-    final user = userCredential.user;
-    final token = await user?.getIdToken();
-    if (token == null || token.isEmpty) {
-      throw StateError('Unable to fetch token');
-    }
-
-    final fallbackDisplayName =
-        user?.displayName ??
-        (credential.givenName != null && credential.familyName != null
-            ? '${credential.givenName} ${credential.familyName}'
-            : null);
-
-    final exchanged = await _exchangeFirebaseLogin(
-      firebaseIdToken: token,
-      provider: 'apple',
-      user: user,
-      fallbackDisplayName: fallbackDisplayName,
-    );
-
-    return UserAuthInfo(
-      token: exchanged.accessToken,
-      refreshToken: exchanged.refreshToken,
-      email: exchanged.email ?? user?.email,
-      displayName: exchanged.displayName ?? fallbackDisplayName,
-      photoURL: exchanged.photoURL ?? user?.photoURL,
-    );
   }
 
   Future<void> signOut() async {
@@ -178,11 +103,6 @@ class AuthRepository {
       }
     }
 
-    if (!_isApplePlatform) {
-      try {
-        await GoogleSignIn.instance.signOut();
-      } catch (_) {}
-    }
     await _auth.signOut();
     await _authLocalStorage.clearSession();
   }
@@ -190,22 +110,12 @@ class AuthRepository {
   Future<_ExchangeResult> _exchangeFirebaseLogin({
     required String firebaseIdToken,
     required String provider,
-    required User? user,
+    required User user,
     String? fallbackDisplayName,
   }) async {
-    final response = await _apiClient.post(
-      'auth/firebase/login',
-      body: {
-        'firebase_id_token': firebaseIdToken,
-        'id_token': firebaseIdToken,
-        'provider': provider,
-        'firebase_uid': user?.uid,
-        'uid': user?.uid,
-        'email': user?.email,
-        'display_name': user?.displayName ?? fallbackDisplayName,
-        'photo_url': user?.photoURL,
-      },
-    );
+    final body = <String, dynamic>{'token': firebaseIdToken};
+
+    final response = await _apiClient.post('auth/firebase/login', body: body);
 
     if (response is! Map<String, dynamic>) {
       throw const FormatException('Invalid login response format');

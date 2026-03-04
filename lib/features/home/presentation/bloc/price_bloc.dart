@@ -231,13 +231,17 @@ class PriceBloc extends Bloc<PriceEvent, PriceState> {
     LoadTokenChartHistory event,
     Emitter<PriceState> emit,
   ) async {
-    if (_loadingChartSymbols.contains(event.symbol)) {
+    final cacheKey = '${event.symbol}_${event.timeframe ?? _chartTimeframe}';
+    if (_loadingChartSymbols.contains(cacheKey)) {
       return;
     }
 
+    // Skip cache when custom timeframe is provided
+    final useCustomTimeframe = event.timeframe != null;
     final cachedHistory = state.chartHistoryCache[event.symbol];
     final cachedLatestTime = state.chartHistoryLatestTimeCache[event.symbol];
-    final isCacheFresh = cachedHistory != null &&
+    final isCacheFresh = !useCustomTimeframe &&
+        cachedHistory != null &&
         cachedHistory.isNotEmpty &&
         cachedLatestTime != null &&
         !_isChartDataExpired(cachedLatestTime);
@@ -263,12 +267,12 @@ class PriceBloc extends Bloc<PriceEvent, PriceState> {
       ));
     }
 
-    _loadingChartSymbols.add(event.symbol);
+    _loadingChartSymbols.add(cacheKey);
     try {
       final historyResult = await _tokenService.getPriceHistory(
         symbol: event.symbol,
-        timeframe: _chartTimeframe,
-        limit: _chartPointLimit,
+        timeframe: event.timeframe ?? _chartTimeframe,
+        limit: event.limit ?? _chartPointLimit,
       );
       final chartData = historyResult.prices;
       final latestTime =
@@ -313,7 +317,7 @@ class PriceBloc extends Bloc<PriceEvent, PriceState> {
     } catch (e) {
       log('LoadTokenChartHistory error for ${event.symbol}: $e');
     } finally {
-      _loadingChartSymbols.remove(event.symbol);
+      _loadingChartSymbols.remove(cacheKey);
     }
   }
 
@@ -330,9 +334,10 @@ class PriceBloc extends Bloc<PriceEvent, PriceState> {
         !_isChartDataExpired(cachedLatestTime);
     final effectiveChartData = hasFreshCache ? cachedChartData : const <double>[];
 
-    double priceChange = 0;
-    double priceChangePercentage = 0;
-    if (effectiveChartData.length >= 2) {
+    // Use API values if available, otherwise calculate from chart data
+    double priceChange = item.priceChange;
+    double priceChangePercentage = item.priceChangePercent;
+    if (priceChange == 0 && priceChangePercentage == 0 && effectiveChartData.length >= 2) {
       final oldestPrice = effectiveChartData.first;
       final latestPrice = effectiveChartData.last;
       priceChange = latestPrice - oldestPrice;
@@ -344,7 +349,7 @@ class PriceBloc extends Bloc<PriceEvent, PriceState> {
       symbol: item.symbol,
       name: item.coin,
       pair: '${item.coin} / USD',
-      imageUrl: '',
+      imageUrl: item.image ?? '',
       currentPrice: item.price,
       decimals: item.decimals,
       priceChange: priceChange,

@@ -60,13 +60,13 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyDMSYPZnMC2EoPPRwrZG_EqAN-ejYr6VRc',
-    appId: '1:1061098133475:ios:25a897d21d09ebc67c72d6',
+    appId: '1:1061098133475:ios:942b8ec366dcc8637c72d6',
     messagingSenderId: '1061098133475',
     projectId: 'zenit-cc73c',
     storageBucket: 'zenit-cc73c.firebasestorage.app',
     androidClientId: '1061098133475-oeg2k6d72kah651cf27sg95n59o4tim4.apps.googleusercontent.com',
-    iosClientId: '1061098133475-glk9tlln3i494bv8jetrhqqodgmbhqcq.apps.googleusercontent.com',
-    iosBundleId: 'com.vistia.zenit',
+    iosClientId: '1061098133475-9h3ad9jekho3u65o3dq047roo0v972ej.apps.googleusercontent.com',
+    iosBundleId: 'com.vistia.zenit-apps',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(

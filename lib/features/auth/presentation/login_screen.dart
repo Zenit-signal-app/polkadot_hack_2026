@@ -1,10 +1,11 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:hugeicons/hugeicons.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/store/user_store.dart';
+import '../../../core/store/favorite_store.dart';
+import '../../home/data/services/favorite_service.dart';
 import '../data/auth_repository.dart';
 import '../../../routes/app_routes.dart';
 
@@ -37,6 +38,20 @@ class _LoginScreenState extends State<LoginScreen> {
         displayName: userInfo.displayName,
         photoURL: userInfo.photoURL,
       );
+
+      // Sync favorites from API to FavoriteStore after login
+      try {
+        final favoriteService = FavoriteService()
+          ..setAuthToken(userInfo.token);
+        final symbols = await favoriteService.getFavorites();
+        if (mounted) {
+          await context.read<FavoriteStore>().syncFavorites(symbols);
+        }
+      } catch (_) {
+        // Non-critical: ignore if favorites sync fails
+      }
+
+      if (!mounted) return;
       Navigator.of(context).pushReplacementNamed(AppRoutes.home);
     } catch (error) {
       if (!mounted) return;
@@ -53,55 +68,8 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  Future<void> _handleAppleSignIn() async {
-    if (_isLoading) return;
-    final isApplePlatform = defaultTargetPlatform == TargetPlatform.iOS ||
-        defaultTargetPlatform == TargetPlatform.macOS;
-    if (!isApplePlatform) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Apple sign-in is not supported here.')),
-      );
-      return;
-    }
-    setState(() {
-      _isLoading = true;
-      _loadingProvider = _AuthProvider.apple;
-    });
-
-    try {
-      final userInfo = await _authRepository.signInWithApple();
-      if (!mounted) return;
-      await context.read<UserStore>().setUserInfo(
-        token: userInfo.token,
-        refreshToken: userInfo.refreshToken,
-        email: userInfo.email,
-        displayName: userInfo.displayName,
-        photoURL: userInfo.photoURL,
-      );
-      Navigator.of(context).pushReplacementNamed(AppRoutes.home);
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Apple sign-in failed: $error')),
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-          _loadingProvider = null;
-        });
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final isApplePlatform = defaultTargetPlatform == TargetPlatform.iOS ||
-        defaultTargetPlatform == TargetPlatform.macOS;
-    final isAndroid = defaultTargetPlatform == TargetPlatform.android;
-    final showGoogle = isAndroid || isApplePlatform;
-    final showApple = isApplePlatform;
-
     return Scaffold(
       backgroundColor: AppColors.dark,
       body: SafeArea(
@@ -130,7 +98,6 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                     ),
                     const SizedBox(height: 28),
-                    if (showGoogle)
                       _AuthButton(
                         label: 'Continue with Google',
                         icon: HugeIcons.strokeRoundedGoogle,
@@ -139,17 +106,6 @@ class _LoginScreenState extends State<LoginScreen> {
                         isLoading: _loadingProvider == _AuthProvider.google,
                         isDisabled: _isLoading,
                         onPressed: _handleGoogleSignIn,
-                      ),
-                    if (showGoogle && showApple) const SizedBox(height: 14),
-                    if (showApple)
-                      _AuthButton(
-                        label: 'Continue with Apple',
-                        icon: HugeIcons.strokeRoundedApple,
-                        background: AppColors.black,
-                        foreground: AppColors.white,
-                        isLoading: _loadingProvider == _AuthProvider.apple,
-                        isDisabled: _isLoading,
-                        onPressed: _handleAppleSignIn,
                       ),
                     const SizedBox(height: 18),
                     Text(
@@ -170,7 +126,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-enum _AuthProvider { google, apple }
+enum _AuthProvider { google }
 
 class _LoginHeader extends StatelessWidget {
   const _LoginHeader();
