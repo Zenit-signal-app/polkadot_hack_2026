@@ -81,14 +81,13 @@ class SignalToolService {
   }
   /// Returns an [RsiResponse] with rsi7/rsi14 records.
   Future<RsiResponse> getRsiData({
-    required String code,
     required String symbol,
     String timeframe = '15m',
     int limit = 100,
   }) async {
     try {
       final response = await _apiClient.get(
-        'signal-tools/$code',
+        'signal-tools/rsi_heatmap',
         queryParameters: {
           'symbol': symbol,
           'timeframe': timeframe,

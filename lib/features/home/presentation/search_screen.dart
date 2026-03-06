@@ -4,6 +4,7 @@ import 'package:hugeicons/hugeicons.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/network/api_client.dart';
+import '../../../core/store/search_history_storage.dart';
 import '../../../core/store/user_store.dart';
 import '../data/models/token_list_item_model.dart';
 import '../data/models/token_model.dart';
@@ -23,6 +24,7 @@ class _SearchScreenState extends State<SearchScreen> {
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
   final ScrollController _scrollController = ScrollController();
+  final SearchHistoryStorage _historyStorage = SearchHistoryStorage();
 
   late TokenService _tokenService;
 
@@ -33,6 +35,7 @@ class _SearchScreenState extends State<SearchScreen> {
   int _offset = 0;
   String? _errorMessage;
   final List<TokenListItemModel> _results = [];
+  List<String> _searchHistory = [];
 
   TokenModel _toTokenModel(TokenListItemModel item) {
     final millis = item.time > 1000000000000 ? item.time : item.time * 1000;
@@ -56,6 +59,8 @@ class _SearchScreenState extends State<SearchScreen> {
     final apiClient = ApiClient()
       ..setAuthToken(context.read<UserStore>().state.accessToken);
     _tokenService = TokenService(apiClient: apiClient);
+
+    _loadSearchHistory();
 
     // Auto focus khi màn hình mở
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -127,6 +132,10 @@ class _SearchScreenState extends State<SearchScreen> {
           _results
             ..clear()
             ..addAll(tokens);
+          // Save to history only when search returns results
+          if (tokens.isNotEmpty) {
+            _saveToHistory(query);
+          }
         } else {
           _results.addAll(tokens);
         }
@@ -145,6 +154,24 @@ class _SearchScreenState extends State<SearchScreen> {
         _isLoadingMore = false;
       });
     }
+  }
+
+  Future<void> _loadSearchHistory() async {
+    final history = await _historyStorage.getHistory();
+    if (!mounted) return;
+    setState(() {
+      _searchHistory = history;
+    });
+  }
+
+  Future<void> _saveToHistory(String keyword) async {
+    await _historyStorage.addToHistory(keyword);
+    await _loadSearchHistory();
+  }
+
+  Future<void> _removeFromHistory(String keyword) async {
+    await _historyStorage.removeFromHistory(keyword);
+    await _loadSearchHistory();
   }
 
   @override
@@ -219,32 +246,104 @@ class _SearchScreenState extends State<SearchScreen> {
             ),
             Expanded(
               child: _searchQuery.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            HugeIcons.strokeRoundedSearch01,
-                            size: 56,
-                            color: AppColors.white.withOpacity(0.3),
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Start searching',
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyLarge
-                                ?.copyWith(
-                                  color: AppColors.gray,
-                                ),
-                          ),
-                        ],
-                      ),
-                    )
+                  ? _buildSearchHistory()
                   : _buildResults(),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildSearchHistory() {
+    if (_searchHistory.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              HugeIcons.strokeRoundedSearch01,
+              size: 56,
+              color: AppColors.white.withValues(alpha: 0.3),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Start searching',
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    color: AppColors.gray,
+                  ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Recent Searches',
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      color: AppColors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+              ),
+              TextButton(
+                onPressed: () async {
+                  await _historyStorage.clearHistory();
+                  await _loadSearchHistory();
+                },
+                child: const Text(
+                  'Clear all',
+                  style: TextStyle(
+                    color: AppColors.blue,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _searchHistory.map((keyword) {
+              return GestureDetector(
+                onTap: () {
+                  _searchController.text = keyword;
+                },
+                child: Chip(
+                  label: Text(
+                    keyword,
+                    style: const TextStyle(
+                      color: AppColors.white,
+                      fontSize: 13,
+                    ),
+                  ),
+                  backgroundColor: const Color(0xFF1E2A3D),
+                  deleteIcon: const Icon(
+                    HugeIcons.strokeRoundedCancel01,
+                    size: 16,
+                    color: AppColors.gray,
+                  ),
+                  onDeleted: () => _removeFromHistory(keyword),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                    side: BorderSide(
+                      color: AppColors.white.withValues(alpha: 0.1),
+                    ),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                ),
+              );
+            }).toList(),
+          ),
+        ],
       ),
     );
   }

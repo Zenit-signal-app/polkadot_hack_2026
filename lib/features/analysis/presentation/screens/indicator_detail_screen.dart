@@ -5,21 +5,25 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/network/api_client.dart';
+import '../../../../core/store/favorite_store.dart';
 import '../../../../core/store/token_store.dart';
 import '../../../../core/store/user_store.dart';
 import '../../../../features/home/data/models/ohlcv_snapshot_model.dart';
 import '../../../../features/home/data/models/token_list_item_model.dart';
 import '../../../../features/home/data/models/token_model.dart';
+import '../../../../features/home/data/services/favorite_service.dart';
 import '../../../../features/home/data/services/price_socket_service.dart';
 import '../../../../features/home/data/services/token_service.dart';
 import '../../../../routes/app_routes.dart';
 import '../../../../shared/widgets/layout/bottom_nav_bar.dart';
 import '../../../../shared/widgets/layout/detail_header_bar.dart';
 import '../../../../shared/widgets/token_selector_bottom_sheet.dart';
+import '../../../../shared/widgets/trading_view_chart.dart';
 import '../../data/models/indicator_model.dart';
 import '../widgets/adx_chart_section.dart';
 import '../widgets/overbought_oversold_section.dart';
 import '../widgets/rsi_heatmap_section.dart';
+import '../widgets/rsi_tabs_with_signals.dart';
 import '../widgets/token_price_section.dart';
 
 class IndicatorDetailScreen extends StatefulWidget {
@@ -33,14 +37,35 @@ class IndicatorDetailScreen extends StatefulWidget {
 
 class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
   late TokenService _tokenService;
+  final FavoriteService _favoriteService = FavoriteService();
   final PriceSocketService _socketService = PriceSocketService();
   StreamSubscription<OhlcvSnapshotMessage>? _socketSubscription;
 
   late TokenModel _selectedToken;
-  bool _isFavorite = false;
+  bool _isLoadingFavorite = false;
 
   // Timeframe selector — supported values match the API.
   String _timeframe = '15m';
+
+  /// Converts timeframe string to minutes for TradingViewChart.
+  int _timeframeToMinutes(String tf) {
+    switch (tf) {
+      case '1m':
+        return 1;
+      case '5m':
+        return 5;
+      case '15m':
+        return 15;
+      case '1h':
+        return 60;
+      case '4h':
+        return 240;
+      case '1D':
+        return 1440;
+      default:
+        return 15; // Default fallback
+    }
+  }
 
   // Heatmap RSI type selector: 'rsi14' | 'rsi7'
   String _heatmapRsiType = 'rsi14';
@@ -65,11 +90,17 @@ class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
   void initState() {
     super.initState();
     _selectedToken = _placeholderToken;
-    final apiClient = ApiClient()
-      ..setAuthToken(context.read<UserStore>().state.accessToken);
+    final accessToken = context.read<UserStore>().state.accessToken;
+    final apiClient = ApiClient()..setAuthToken(accessToken);
     _tokenService = TokenService(apiClient: apiClient);
+    _favoriteService.setAuthToken(accessToken);
     _loadAvailableTokens();
     _connectSocket();
+
+    // Nếu FavoriteStore chưa được load (null), fetch từ API
+    if (!context.read<FavoriteStore>().state.isLoaded) {
+      _fetchFavorites();
+    }
   }
 
   @override
@@ -146,11 +177,25 @@ class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
           currentPrice: close ?? _selectedToken.currentPrice,
           priceChange: priceChange,
           priceChangePercentage: priceChangePct,
-          chartData: result.prices.isNotEmpty ? result.prices : _selectedToken.chartData,
+          chartData: result.prices.isNotEmpty
+              ? result.prices
+              : _selectedToken.chartData,
         );
       });
     } catch (_) {
       // Non-critical — token still shows with initial values.
+    }
+  }
+
+  /// Fetch danh sách favorites từ API và sync vào FavoriteStore
+  Future<void> _fetchFavorites() async {
+    try {
+      final symbols = await _favoriteService.getFavorites();
+      if (mounted) {
+        await context.read<FavoriteStore>().syncFavorites(symbols);
+      }
+    } catch (_) {
+      // Non-critical: nếu lỗi thì hiển thị icon mặc định (không favorite)
     }
   }
 
@@ -212,67 +257,126 @@ class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0A1628),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Fixed header
-            DetailHeaderBar(title: widget.indicator.title),
+    return BlocBuilder<FavoriteStore, FavoriteState>(
+      builder: (context, favoriteState) {
+        final isFavorite = favoriteState.isFavorite(_selectedToken.pair);
 
-            // Scrollable content
-            Expanded(
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildTokenPriceSection(),
-                    const SizedBox(height: 24),
-                    _buildToolbar(),
-                    const SizedBox(height: 24),
-                    _buildContent(),
-                  ],
+        return Scaffold(
+          backgroundColor: const Color(0xFF0A1628),
+          body: SafeArea(
+            child: Column(
+              children: [
+                // Fixed header
+                DetailHeaderBar(title: widget.indicator.title),
+
+                // Scrollable content
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _buildTokenPriceSection(isFavorite),
+                        const SizedBox(height: 24),
+                        _buildToolbar(),
+                        const SizedBox(height: 24),
+                        _buildContent(),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ),
-          ],
-        ),
-      ),
-      bottomNavigationBar: BottomNavBar(
-        currentIndex: 1, // Analysis tab
-        onTap: (index) {
-          if (index == 1) return; // Already on Analysis
+          ),
+          bottomNavigationBar: BottomNavBar(
+            currentIndex: 1, // Analysis tab
+            onTap: (index) {
+              if (index == 1) return; // Already on Analysis
 
-          // Navigate to HomeShell with selected tab or AI Chat
-          switch (index) {
-            case 0:
-              Navigator.of(
-                context,
-              ).pushNamedAndRemoveUntil(AppRoutes.home, (route) => false);
-              break;
-            case 2:
-              Navigator.of(
-                context,
-              ).pushNamedAndRemoveUntil(AppRoutes.news, (route) => false);
-              break;
-            case 3:
-              Navigator.of(
-                context,
-              ).pushNamedAndRemoveUntil(AppRoutes.aiChat, (route) => false);
-              break;
-          }
-        },
-      ),
+              // Navigate to HomeShell with selected tab or AI Chat
+              switch (index) {
+                case 0:
+                  Navigator.of(
+                    context,
+                  ).pushNamedAndRemoveUntil(AppRoutes.home, (route) => false);
+                  break;
+                case 2:
+                  Navigator.of(
+                    context,
+                  ).pushNamedAndRemoveUntil(AppRoutes.aiChat, (route) => false);
+                  break;
+                case 3:
+                  Navigator.of(
+                    context,
+                  ).pushNamedAndRemoveUntil(AppRoutes.news, (route) => false);
+                  break;
+              }
+            },
+          ),
+        );
+      },
     );
   }
 
-  Widget _buildTokenPriceSection() {
+  Widget _buildTokenPriceSection(bool isFavorite) {
     return TokenPriceSection(
       selectedToken: _selectedToken,
-      isFavorite: _isFavorite,
+      isFavorite: isFavorite,
       onTokenSelectorTap: _showTokenSelector,
-      onFavoriteTap: () => setState(() => _isFavorite = !_isFavorite),
+      onFavoriteTap: () => _handleFavoriteTap(isFavorite),
     );
+  }
+
+  Future<void> _handleFavoriteTap(bool isFavorite) async {
+    if (_isLoadingFavorite) return;
+
+    setState(() {
+      _isLoadingFavorite = true;
+    });
+
+    final favoriteStore = context.read<FavoriteStore>();
+
+    try {
+      if (isFavorite) {
+        // Remove from favorites
+        await _favoriteService.removeFavorite(_selectedToken.pair);
+        await favoriteStore.removeFavorite(_selectedToken.pair);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Removed ${_selectedToken.symbol} from favorites'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      } else {
+        // Add to favorites
+        await _favoriteService.addFavorite(_selectedToken.pair);
+        await favoriteStore.addFavorite(_selectedToken.pair);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Added ${_selectedToken.symbol} to favorites'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to update favorite: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingFavorite = false;
+        });
+      }
+    }
   }
 
   Widget _buildToolbar() {
@@ -308,7 +412,9 @@ class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
               if (showHeatmap) const SizedBox(width: 8),
               _TimeframeDropdown(
                 selected: _timeframe,
-                onChanged: (value) => setState(() => _timeframe = value),
+                onChanged: (value) {
+                  setState(() => _timeframe = value);
+                },
               ),
             ],
           ),
@@ -321,12 +427,36 @@ class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
   Widget _buildContent() {
     final uses = widget.indicator.uses
         .where((u) => u != 'default_length')
-        .toSet();
+        .toList();
 
-    final showHeatmap = uses.contains('rsi_heatmap');
-    final showAdx = uses.contains('adx');
-    // RSI oversold/overbought shown for default indicators and heatmap indicators.
-    final showRsi = uses.isEmpty || showHeatmap;
+    final widgets = <Widget>[];
+
+    // Map each 'use' to its corresponding widget
+    for (final use in uses) {
+      final widget = _buildWidgetForUse(use);
+      if (widget != null) {
+        if (widgets.isNotEmpty) {
+          widgets.add(const SizedBox(height: 24));
+        }
+        widgets.add(widget);
+      }
+    }
+
+    // RSI oversold/overbought shown for default indicators or rsi_heatmap
+    if (uses.isEmpty || uses.contains('rsi_heatmap')) {
+      if (widgets.isNotEmpty) {
+        widgets.add(const SizedBox(height: 24));
+      }
+      widgets.add(
+        OverboughtOversoldSection(
+          symbol: _selectedToken.pair,
+          timeframe: _timeframe,
+          indicatorCode: widget.indicator.code,
+          tokenImageUrl: _selectedToken.imageUrl,
+          tokenShortSymbol: _selectedToken.symbol,
+        ),
+      );
+    }
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -334,39 +464,81 @@ class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SizedBox(height: 16),
+          ...widgets,
+          const SizedBox(height: 24),
+          _buildRsiSignalsSection(),
+        ],
+      ),
+    );
+  }
 
-          // ── RSI Heatmap bubbles ──────────────────────────────────────────
-          if (showHeatmap) ...[
-            RsiHeatmapSection(
-              timeframe: _timeframe,
-              heatmapRsiType: _heatmapRsiType,
+  /// RSI signals tabs displayed at the bottom for all indicators
+  Widget _buildRsiSignalsSection() {
+    return Column(
+      children: [
+        RsiTabsWithSignals(
+          symbol: _selectedToken.pair,
+          timeframe: _timeframe,
+          tokenImageUrl: _selectedToken.imageUrl,
+        ),
+        const SizedBox(height: 24),
+      ],
+    );
+  }
+
+  /// Maps a single 'use' string to its corresponding widget.
+  Widget? _buildWidgetForUse(String use) {
+    switch (use) {
+      case 'rsi_heatmap':
+      case 'heatmap':
+        return RsiHeatmapSection(
+          timeframe: _timeframe,
+          heatmapRsiType: _heatmapRsiType,
+        );
+
+      case 'adx':
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TradingViewChart(
+              symbol: _selectedToken.pair,
+              indicators: const [TradingViewIndicator.adx],
+              timeframe: _timeframeToMinutes(_timeframe),
+              height: 400,
             ),
             const SizedBox(height: 24),
-          ],
-
-          // ── RSI line charts + oversold/overbought signal list ────────────
-          if (showRsi)
-            OverboughtOversoldSection(
-              symbol: _selectedToken.pair,
-              timeframe: _timeframe,
-              indicatorCode: widget.indicator.code,
-              tokenImageUrl: _selectedToken.imageUrl,
-              tokenShortSymbol: _selectedToken.symbol,
-            ),
-
-          // ── ADX chart ────────────────────────────────────────────────────
-          if (showAdx) ...[
-            if (showRsi) const SizedBox(height: 24),
             AdxChartSection(
               symbol: _selectedToken.pair,
               timeframe: _timeframe,
             ),
           ],
+        );
 
-          const SizedBox(height: 24),
-        ],
-      ),
-    );
+      case 'adx_line':
+        return AdxChartSection(
+          symbol: _selectedToken.pair,
+          timeframe: _timeframe,
+        );
+
+      case 'candle_chart':
+        return TradingViewChart(
+          symbol: _selectedToken.pair,
+          indicators: const [],
+          timeframe: _timeframeToMinutes(_timeframe),
+          height: 400,
+        );
+
+      case 'psar':
+        return TradingViewChart(
+          symbol: _selectedToken.pair,
+          indicators: const [TradingViewIndicator.psar],
+          timeframe: _timeframeToMinutes(_timeframe),
+          height: 400,
+        );
+
+      default:
+        return null;
+    }
   }
 }
 
@@ -376,10 +548,7 @@ class _TimeframeDropdown extends StatelessWidget {
   final String selected;
   final ValueChanged<String> onChanged;
 
-  const _TimeframeDropdown({
-    required this.selected,
-    required this.onChanged,
-  });
+  const _TimeframeDropdown({required this.selected, required this.onChanged});
 
   static const _options = ['1m', '5m', '15m', '1h', '4h', '1D'];
 
@@ -432,9 +601,7 @@ class _TimeframeDropdown extends StatelessWidget {
         offset.dx + size.width,
         0,
       ),
-      items: _options
-          .map((tf) => _menuItem(tf, tf == selected))
-          .toList(),
+      items: _options.map((tf) => _menuItem(tf, tf == selected)).toList(),
     ).then((value) {
       if (value != null && value != selected) {
         onChanged(value);
@@ -457,11 +624,7 @@ class _TimeframeDropdown extends StatelessWidget {
             ),
           ),
           if (isSelected)
-            const Icon(
-              Icons.check_rounded,
-              color: Color(0xFF3B82F6),
-              size: 16,
-            ),
+            const Icon(Icons.check_rounded, color: Color(0xFF3B82F6), size: 16),
         ],
       ),
     );
@@ -558,11 +721,7 @@ class _RsiTypeDropdown extends StatelessWidget {
             ),
           ),
           if (isSelected)
-            const Icon(
-              Icons.check_rounded,
-              color: Color(0xFF3B82F6),
-              size: 16,
-            ),
+            const Icon(Icons.check_rounded, color: Color(0xFF3B82F6), size: 16),
         ],
       ),
     );

@@ -50,6 +50,9 @@ class TradingViewChart extends StatefulWidget {
   /// Indicators to overlay on the chart.
   final List<TradingViewIndicator> indicators;
 
+  /// Timeframe in minutes (optional). E.g. 15 for 15m, 60 for 1h, 240 for 4h.
+  final int? timeframe;
+
   /// Height of the chart widget. Defaults to 400.
   final double height;
 
@@ -60,6 +63,7 @@ class TradingViewChart extends StatefulWidget {
     super.key,
     required this.symbol,
     this.indicators = const [],
+    this.timeframe,
     this.height = 400,
     this.onReady,
   });
@@ -89,7 +93,8 @@ class _TradingViewChartState extends State<TradingViewChart>
   void didUpdateWidget(covariant TradingViewChart old) {
     super.didUpdateWidget(old);
     if (old.symbol != widget.symbol ||
-        !_indicatorsEqual(old.indicators, widget.indicators)) {
+        !_indicatorsEqual(old.indicators, widget.indicators) ||
+        old.timeframe != widget.timeframe) {
       setState(() => _isLoading = true);
       _loadChart();
     }
@@ -127,6 +132,9 @@ class _TradingViewChartState extends State<TradingViewChart>
     };
     if (widget.indicators.isNotEmpty) {
       params['indicators'] = widget.indicators.map((i) => i.id).join(',');
+    }
+    if (widget.timeframe != null) {
+      params['timeframe'] = widget.timeframe.toString();
     }
     return Uri.parse(_kBaseChartUrl).replace(queryParameters: params);
   }

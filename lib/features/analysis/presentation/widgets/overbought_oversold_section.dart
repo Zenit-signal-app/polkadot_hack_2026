@@ -34,8 +34,7 @@ class OverboughtOversoldSection extends StatefulWidget {
       _OverboughtOversoldSectionState();
 }
 
-class _OverboughtOversoldSectionState
-    extends State<OverboughtOversoldSection> {
+class _OverboughtOversoldSectionState extends State<OverboughtOversoldSection> {
   late SignalToolService _service;
   RsiResponse? _response;
   bool _isLoading = false;
@@ -66,7 +65,6 @@ class _OverboughtOversoldSectionState
     });
     try {
       final response = await _service.getRsiData(
-        code: widget.indicatorCode,
         symbol: widget.symbol,
         timeframe: widget.timeframe,
       );
@@ -89,9 +87,7 @@ class _OverboughtOversoldSectionState
     if (_isLoading) {
       return const SizedBox(
         height: 200,
-        child: Center(
-          child: CircularProgressIndicator(color: AppColors.blue),
-        ),
+        child: Center(child: CircularProgressIndicator(color: AppColors.blue)),
       );
     }
     if (_error != null) {
@@ -103,26 +99,6 @@ class _OverboughtOversoldSectionState
 
     final rsi14Data = rsi.rsi14ChartData;
     final rsi7Data = rsi.rsi7ChartData;
-
-    // Build signal rows for overbought / oversold conditions.
-    List<Map<String, dynamic>> buildSignals(bool oversold) {
-      return rsi.data
-          .where((r) =>
-              r.rsi14 != null &&
-              (oversold ? r.rsi14! < 30 : r.rsi14! > 70))
-          .map((r) {
-            final dt = r.dateTime;
-            return {
-              'pair': '${widget.tokenShortSymbol}/USDT',
-              'rsi': r.rsi14!.toStringAsFixed(1),
-              'date':
-                  '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}',
-              'time':
-                  '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}',
-            };
-          })
-          .toList();
-    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -154,8 +130,8 @@ class _OverboughtOversoldSectionState
         // Overbought / Oversold signal tables
         if (rsi14Data.isNotEmpty)
           RsiTabsWithSignals(
-            oversoldSignals: buildSignals(true),
-            overboughtSignals: buildSignals(false),
+            symbol: widget.symbol,
+            timeframe: widget.timeframe,
             tokenImageUrl: widget.tokenImageUrl,
           ),
       ],
@@ -212,8 +188,10 @@ class _ErrorRetry extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(message,
-                style: const TextStyle(color: AppColors.white, fontSize: 13)),
+            Text(
+              message,
+              style: const TextStyle(color: AppColors.white, fontSize: 13),
+            ),
             const SizedBox(height: 10),
             TextButton(onPressed: onRetry, child: const Text('Retry')),
           ],

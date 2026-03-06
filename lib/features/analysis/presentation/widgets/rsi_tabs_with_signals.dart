@@ -1,18 +1,22 @@
 import 'package:flutter/material.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/network/api_client.dart';
+import '../../data/models/rsi_response_model.dart';
+import '../../data/services/signal_tool_service.dart';
 
 /// Main widget containing tabs and signal list
+/// Fetches RSI data internally based on symbol and timeframe
 class RsiTabsWithSignals extends StatefulWidget {
-  final List<Map<String, dynamic>> oversoldSignals;
-  final List<Map<String, dynamic>> overboughtSignals;
-  final String tokenImageUrl;
+  final String symbol;
+  final String timeframe;
+  final String? tokenImageUrl;
 
   const RsiTabsWithSignals({
     super.key,
-    required this.oversoldSignals,
-    required this.overboughtSignals,
-    required this.tokenImageUrl,
+    required this.symbol,
+    required this.timeframe,
+    this.tokenImageUrl,
   });
 
   @override
@@ -21,6 +25,71 @@ class RsiTabsWithSignals extends StatefulWidget {
 
 class _RsiTabsWithSignalsState extends State<RsiTabsWithSignals> {
   String _selectedTab = 'oversold';
+  late SignalToolService _service;
+  RsiResponse? _rsiResponse;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    final apiClient = ApiClient();
+    _service = SignalToolService(apiClient: apiClient);
+    _loadRsiData();
+  }
+
+  @override
+  void didUpdateWidget(covariant RsiTabsWithSignals oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.symbol != widget.symbol ||
+        oldWidget.timeframe != widget.timeframe) {
+      _loadRsiData();
+    }
+  }
+
+  Future<void> _loadRsiData() async {
+    if (!mounted) return;
+    setState(() => _isLoading = true);
+    try {
+      final response = await _service.getRsiData(
+        symbol: widget.symbol,
+        timeframe: widget.timeframe,
+      );
+      if (!mounted) return;
+      setState(() {
+        _rsiResponse = response;
+        _isLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+    }
+  }
+
+  List<Map<String, dynamic>> _buildSignals(bool oversold) {
+    final rsi = _rsiResponse;
+    if (rsi == null) return [];
+
+    final symbolDisplay = widget.symbol.endsWith('USDT')
+        ? widget.symbol.substring(0, widget.symbol.length - 4)
+        : widget.symbol;
+
+    return rsi.data
+        .where(
+          (r) => r.rsi14 != null && (oversold ? r.rsi14! < 30 : r.rsi14! > 70),
+        )
+        .map((r) {
+          final dt = r.dateTime;
+          return {
+            'pair': '$symbolDisplay/USDT',
+            'rsi': r.rsi14!.toStringAsFixed(1),
+            'date':
+                '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}',
+            'time':
+                '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}',
+          };
+        })
+        .toList();
+  }
 
   void _handleTabChange(String tab) {
     setState(() {
@@ -30,6 +99,22 @@ class _RsiTabsWithSignalsState extends State<RsiTabsWithSignals> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return Container(
+        height: 200,
+        decoration: BoxDecoration(
+          color: const Color.fromRGBO(22, 30, 51, 1),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Center(
+          child: CircularProgressIndicator(color: AppColors.blue),
+        ),
+      );
+    }
+
+    final oversoldSignals = _buildSignals(true);
+    final overboughtSignals = _buildSignals(false);
+
     return Container(
       decoration: BoxDecoration(
         color: const Color.fromRGBO(22, 30, 51, 1),
@@ -45,9 +130,9 @@ class _RsiTabsWithSignalsState extends State<RsiTabsWithSignals> {
           // Signal list - receives selected tab to filter/display content
           _SignalList(
             signals: _selectedTab == 'oversold'
-                ? widget.oversoldSignals
-                : widget.overboughtSignals,
-            tokenImageUrl: widget.tokenImageUrl,
+                ? oversoldSignals
+                : overboughtSignals,
+            tokenImageUrl: widget.tokenImageUrl ?? '',
             isOversold: _selectedTab == 'oversold',
           ),
         ],

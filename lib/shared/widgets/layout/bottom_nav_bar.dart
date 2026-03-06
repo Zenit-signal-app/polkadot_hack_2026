@@ -40,23 +40,38 @@ class BottomNavBar extends StatelessWidget {
           items: const [
             BottomNavigationBarItem(
               icon: Icon(HugeIcons.strokeRoundedHome01, color: AppColors.gray),
-              activeIcon: Icon(HugeIcons.strokeRoundedHome01, color: AppColors.white),
+              activeIcon: Icon(
+                HugeIcons.strokeRoundedHome01,
+                color: AppColors.white,
+              ),
               label: 'Home',
             ),
             BottomNavigationBarItem(
               icon: Icon(HugeIcons.strokeRoundedChart01, color: AppColors.gray),
-              activeIcon: Icon(HugeIcons.strokeRoundedChart01, color: AppColors.white),
+              activeIcon: Icon(
+                HugeIcons.strokeRoundedChart01,
+                color: AppColors.white,
+              ),
               label: 'Analysis',
             ),
             BottomNavigationBarItem(
-              icon: Icon(HugeIcons.strokeRoundedNews01, color: AppColors.gray),
-              activeIcon: Icon(HugeIcons.strokeRoundedNews01, color: AppColors.white),
-              label: 'News',
+              icon: Icon(
+                HugeIcons.strokeRoundedComment02,
+                color: AppColors.gray,
+              ),
+              activeIcon: Icon(
+                HugeIcons.strokeRoundedComment02,
+                color: AppColors.white,
+              ),
+              label: 'AI Chat',
             ),
             BottomNavigationBarItem(
-              icon: Icon(HugeIcons.strokeRoundedComment02, color: AppColors.gray),
-              activeIcon: Icon(HugeIcons.strokeRoundedComment02, color: AppColors.white),
-              label: 'Ai Chat',
+              icon: Icon(HugeIcons.strokeRoundedNews01, color: AppColors.gray),
+              activeIcon: Icon(
+                HugeIcons.strokeRoundedNews01,
+                color: AppColors.white,
+              ),
+              label: 'News',
             ),
           ],
         ),

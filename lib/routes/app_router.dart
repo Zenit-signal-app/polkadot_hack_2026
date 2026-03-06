@@ -37,11 +37,6 @@ class AppRouter {
         );
       case AppRoutes.news:
         return MaterialPageRoute(
-          builder: (_) => const HomeShell(initialIndex: 2),
-          settings: settings,
-        );
-      case AppRoutes.chat:
-        return MaterialPageRoute(
           builder: (_) => const HomeShell(initialIndex: 3),
           settings: settings,
         );

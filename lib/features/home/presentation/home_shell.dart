@@ -22,8 +22,8 @@ class _HomeShellState extends State<HomeShell> {
   final List<Widget> _pages = const [
     HomeScreen(),
     AnalysisScreen(),
-    NewsScreen(),
     SizedBox.shrink(), // AI Chat navigates to separate screen
+    NewsScreen(),
   ];
 
   @override
@@ -36,26 +36,15 @@ class _HomeShellState extends State<HomeShell> {
     if (index == _currentIndex) return;
     
     // Navigate to AI Chat as separate screen
-    if (index == 3) {
+    if (index == 2) {
       Navigator.of(context).pushNamed(AppRoutes.aiChat);
       return;
     }
 
+    // For tabs within IndexedStack, just update the index
     setState(() {
       _currentIndex = index;
     });
-
-    switch (index) {
-      case 1:
-        Navigator.of(context).pushReplacementNamed(AppRoutes.analysis);
-        break;
-      case 2:
-        Navigator.of(context).pushReplacementNamed(AppRoutes.news);
-        break;
-      case 0:
-      default:
-        Navigator.of(context).pushReplacementNamed(AppRoutes.home);
-    }
   }
 
   @override

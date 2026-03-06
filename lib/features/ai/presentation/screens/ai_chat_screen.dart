@@ -305,9 +305,9 @@ class _AIChatScreenState extends State<AIChatScreen> {
             ),
           ),
           bottomNavigationBar: BottomNavBar(
-            currentIndex: 3,
+            currentIndex: 2,
             onTap: (index) {
-              if (index == 3) return;
+              if (index == 2) return;
               switch (index) {
                 case 0:
                   Navigator.of(context).pushNamedAndRemoveUntil(
@@ -321,7 +321,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
                     (route) => false,
                   );
                   break;
-                case 2:
+                case 3:
                   Navigator.of(context).pushNamedAndRemoveUntil(
                     AppRoutes.news,
                     (route) => false,
