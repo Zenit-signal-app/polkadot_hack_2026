@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import '../../data/models/ohlcv_snapshot_model.dart';
 import '../../data/models/token_model.dart';
 
 abstract class PriceEvent extends Equatable {
@@ -112,4 +113,13 @@ class ConnectionStatusChanged extends PriceEvent {
 
   @override
   List<Object?> get props => [isConnected];
+}
+
+class OhlcvSnapshotReceived extends PriceEvent {
+  final OhlcvSnapshotMessage snapshot;
+
+  const OhlcvSnapshotReceived(this.snapshot);
+
+  @override
+  List<Object?> get props => [snapshot];
 }

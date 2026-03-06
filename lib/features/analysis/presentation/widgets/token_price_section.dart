@@ -3,6 +3,7 @@ import 'package:hugeicons/hugeicons.dart';
 import 'package:intl/intl.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/utils/price_formatter.dart';
 import '../../../../features/home/data/models/token_model.dart';
 import '../../../../shared/widgets/token_selector_button.dart';
 
@@ -25,8 +26,8 @@ class TokenPriceSection extends StatelessWidget {
     final priceColor = selectedToken.isPriceUp
         ? const Color(0xFF00C853)
         : const Color(0xFFFF1744);
-    final formattedPrice = NumberFormat('#,##0').format(selectedToken.currentPrice);
-    final formattedChange = NumberFormat('#,##0.0000').format(selectedToken.priceChange.abs());
+    final formattedPrice = numberFormatter(selectedToken.currentPrice, decimals: selectedToken.decimals);
+    final formattedChange = numberFormatter(selectedToken.priceChange.abs(), decimals: selectedToken.decimals);
     final formattedPercentage = NumberFormat('0.00').format(selectedToken.priceChangePercentage.abs());
 
     return Padding(

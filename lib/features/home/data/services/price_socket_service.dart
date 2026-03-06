@@ -1,128 +1,113 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:developer';
 
-import 'package:socket_io_client/socket_io_client.dart' as IO;
-import '../models/price_update_model.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
+
+import '../models/ohlcv_snapshot_model.dart';
 
 class PriceSocketService {
-  IO.Socket? _socket;
-  final StreamController<PriceUpdateModel> _priceController =
-      StreamController<PriceUpdateModel>.broadcast();
+  WebSocketChannel? _channel;
+  StreamSubscription? _subscription;
+
+  final StreamController<OhlcvSnapshotMessage> _snapshotController =
+      StreamController<OhlcvSnapshotMessage>.broadcast();
   final StreamController<bool> _connectionController =
       StreamController<bool>.broadcast();
 
-  Stream<PriceUpdateModel> get priceStream => _priceController.stream;
+  Stream<OhlcvSnapshotMessage> get snapshotStream => _snapshotController.stream;
   Stream<bool> get connectionStream => _connectionController.stream;
 
-  bool get isConnected => _socket?.connected ?? false;
+  bool _isConnected = false;
+  bool get isConnected => _isConnected;
 
-  // Default WebSocket URL - you can configure this in .env file
-  static const String defaultSocketUrl = 'wss://stream.binance.com:9443/ws';
+  /// Derives the WebSocket URL from the API_BASE_URL env variable.
+  /// e.g. https://zenit-api.seerbot.io/ → wss://zenit-api.seerbot.io/ohlcv
+  static String get _defaultWsUrl {
+    final base = dotenv.env['API_BASE_URL'] ?? 'https://zenit-api.seerbot.io/';
+    final wsBase = base
+        .replaceFirst('https://', 'wss://')
+        .replaceFirst('http://', 'ws://')
+        .replaceAll(RegExp(r'/+$'), '');
+    return '$wsBase/ohlcv';
+  }
 
   Future<void> connect({String? customUrl}) async {
+    await disconnect();
+    final url = customUrl ?? _defaultWsUrl;
+    log('Connecting to WebSocket: $url');
     try {
-      final socketUrl = customUrl ?? defaultSocketUrl;
-      
-      // For Binance WebSocket, we don't use socket.io but pure WebSocket
-      // This is a generic socket.io implementation
-      // You can modify this based on your backend
-      _socket = IO.io(
-        socketUrl,
-        IO.OptionBuilder()
-            .setTransports(['websocket'])
-            .disableAutoConnect()
-            .setReconnectionDelay(1000)
-            .setReconnectionDelayMax(5000)
-            .setReconnectionAttempts(5)
-            .build(),
+      _channel = WebSocketChannel.connect(Uri.parse(url));
+
+      // Await the real handshake — throws if the server refuses.
+      await _channel!.ready;
+
+      _isConnected = true;
+      _connectionController.add(true);
+      log('WebSocket connected: $url');
+
+      _subscription = _channel!.stream.listen(
+        _onMessage,
+        onError: (Object error) {
+          log('WebSocket error: $error');
+          _isConnected = false;
+          _connectionController.add(false);
+        },
+        onDone: () {
+          log('WebSocket closed');
+          _isConnected = false;
+          _connectionController.add(false);
+        },
       );
-
-      _socket!.onConnect((_) {
-        log('Socket connected');
-        _connectionController.add(true);
-      });
-
-      _socket!.onDisconnect((_) {
-        log('Socket disconnected');
-        _connectionController.add(false);
-      });
-
-      _socket!.onConnectError((data) {
-        log('Connection error: $data');
-        _connectionController.add(false);
-      });
-
-      _socket!.onError((data) {
-        log('Socket error: $data');
-      });
-
-      // Listen for price updates
-      _socket!.on('price_update', (data) {
-        try {
-          final priceUpdate = PriceUpdateModel.fromJson(data);
-          _priceController.add(priceUpdate);
-        } catch (e) {
-          log('Error parsing price update: $e');
-        }
-      });
-
-      _socket!.connect();
     } catch (e) {
-      log('Error connecting to socket: $e');
+      log('Error connecting to WebSocket: $e');
+      _isConnected = false;
       _connectionController.add(false);
     }
   }
 
-  void subscribeToToken(String symbol) {
-    if (_socket?.connected == true) {
-      _socket!.emit('subscribe', {'symbol': symbol});
-      log('Subscribed to $symbol');
+  void _onMessage(dynamic raw) {
+    try {
+      log('WS raw message (first 300 chars): ${raw.toString().substring(0, raw.toString().length.clamp(0, 300))}');
+      final json = jsonDecode(raw as String) as Map<String, dynamic>;
+      final type = json['type'];
+      final data = json['data'];
+      final symbolKeys = data is Map ? data.keys.toList() : [];
+      log('WS message type=$type totalSymbols=${symbolKeys.length} symbols=${symbolKeys.take(5)}');
+      if (type == 'snapshot') {
+        final msg = OhlcvSnapshotMessage.fromJson(json);
+        log('WS snapshot parsed: ${msg.data.length} symbols');
+        _snapshotController.add(msg);
+      } else {
+        log('WS unknown message type: $type');
+      }
+    } catch (e, st) {
+      log('Error parsing WebSocket message: $e\n$st');
     }
   }
 
-  void unsubscribeFromToken(String symbol) {
-    if (_socket?.connected == true) {
-      _socket!.emit('unsubscribe', {'symbol': symbol});
-      log('Unsubscribed from $symbol');
-    }
-  }
+  // No-ops — server sends all tokens automatically; no subscribe messages needed.
+  void subscribeToToken(String symbol) {}
+  void unsubscribeFromToken(String symbol) {}
+  void subscribeToMultipleTokens(List<String> symbols) {}
 
-  void subscribeToMultipleTokens(List<String> symbols) {
-    if (_socket?.connected == true) {
-      _socket!.emit('subscribe_multiple', {'symbols': symbols});
-      log('Subscribed to ${symbols.length} tokens');
-    }
-  }
-
-  void disconnect() {
-    _socket?.disconnect();
-    _socket?.dispose();
-    _socket = null;
+  Future<void> disconnect() async {
+    await _subscription?.cancel();
+    _subscription = null;
+    await _channel?.sink.close();
+    _channel = null;
+    _isConnected = false;
   }
 
   void dispose() {
     disconnect();
-    _priceController.close();
+    _snapshotController.close();
     _connectionController.close();
   }
 }
 
-// Alternative implementation for Binance WebSocket (using raw WebSocket)
+// Legacy stub — kept so existing imports do not break.
 class BinanceSocketService {
-  final StreamController<PriceUpdateModel> _priceController =
-      StreamController<PriceUpdateModel>.broadcast();
-
-  Stream<PriceUpdateModel> get priceStream => _priceController.stream;
-
-  // Example: Subscribe to BTC/USDT ticker
-  // wss://stream.binance.com:9443/ws/btcusdt@ticker
-  void subscribeToBinanceTicker(String symbol) {
-    // This would use dart:html WebSocket or web_socket_channel package
-    // Implementation depends on your specific needs
-    log('Subscribe to Binance ticker for $symbol');
-  }
-
-  void dispose() {
-    _priceController.close();
-  }
+  void dispose() {}
 }

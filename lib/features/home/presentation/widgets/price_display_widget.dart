@@ -28,6 +28,9 @@ class PriceDisplayWidget extends StatelessWidget {
       children: [
         Text(
           formattedPrice,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.end,
           style: const TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.w700,
@@ -38,6 +41,9 @@ class PriceDisplayWidget extends StatelessWidget {
         const SizedBox(height: 4),
         Text(
           '${isPriceUp ? '+' : '-'}$formattedPercentage%',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.end,
           style: TextStyle(
             fontSize: 14,
             fontWeight: FontWeight.w600,

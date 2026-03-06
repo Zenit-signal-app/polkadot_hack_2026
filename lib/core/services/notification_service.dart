@@ -45,6 +45,9 @@ class NotificationService {
 
     // Get FCM token
     await _getFCMToken();
+
+    // Subscribe to signals topic
+    await subscribeToTopic('signals');
   }
 
   /// Request notification permission

@@ -56,7 +56,7 @@ class _HeaderBarState extends State<HeaderBar> {
             clipBehavior: Clip.none,
             children: [
               IconButton(
-                onPressed: () {},
+                onPressed: () => Navigator.of(context).pushNamed(AppRoutes.notifications),
                 icon: const Icon(HugeIcons.strokeRoundedNotification03),
                 color: AppColors.white,
                 padding: EdgeInsets.zero,

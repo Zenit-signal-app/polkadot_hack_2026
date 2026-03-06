@@ -9,4 +9,5 @@ class AppRoutes {
   static const search = '/search';
   static const tokenInfo = '/token-info';
   static const indicatorDetail = '/indicator-detail';
+  static const notifications = '/notifications';
 }

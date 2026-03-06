@@ -4,12 +4,14 @@ import '../../../../core/constants/app_colors.dart';
 
 /// Main widget containing tabs and signal list
 class RsiTabsWithSignals extends StatefulWidget {
-  final List<Map<String, dynamic>> signals;
+  final List<Map<String, dynamic>> oversoldSignals;
+  final List<Map<String, dynamic>> overboughtSignals;
   final String tokenImageUrl;
 
   const RsiTabsWithSignals({
     super.key,
-    required this.signals,
+    required this.oversoldSignals,
+    required this.overboughtSignals,
     required this.tokenImageUrl,
   });
 
@@ -42,9 +44,11 @@ class _RsiTabsWithSignalsState extends State<RsiTabsWithSignals> {
           ),
           // Signal list - receives selected tab to filter/display content
           _SignalList(
-            signals: widget.signals,
+            signals: _selectedTab == 'oversold'
+                ? widget.oversoldSignals
+                : widget.overboughtSignals,
             tokenImageUrl: widget.tokenImageUrl,
-            selectedTab: _selectedTab,
+            isOversold: _selectedTab == 'oversold',
           ),
         ],
       ),
@@ -162,25 +166,38 @@ class _TabButton extends StatelessWidget {
 class _SignalList extends StatelessWidget {
   final List<Map<String, dynamic>> signals;
   final String tokenImageUrl;
-  final String selectedTab;
+  final bool isOversold;
 
   const _SignalList({
     required this.signals,
     required this.tokenImageUrl,
-    required this.selectedTab,
+    required this.isOversold,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      child: Column(
-        children: List.generate(
-          signals.length,
-          (index) => _SignalItem(
-            signal: signals[index],
-            tokenImageUrl: tokenImageUrl,
-            isLast: index == signals.length - 1,
+    if (signals.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 32),
+        child: Center(
+          child: Text(
+            'No signals',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.4),
+              fontSize: 13,
+            ),
           ),
+        ),
+      );
+    }
+    return Column(
+      children: List.generate(
+        signals.length,
+        (index) => _SignalItem(
+          signal: signals[index],
+          tokenImageUrl: tokenImageUrl,
+          isLast: index == signals.length - 1,
+          isOversold: isOversold,
         ),
       ),
     );
@@ -192,15 +209,20 @@ class _SignalItem extends StatelessWidget {
   final Map<String, dynamic> signal;
   final String tokenImageUrl;
   final bool isLast;
+  final bool isOversold;
 
   const _SignalItem({
     required this.signal,
     required this.tokenImageUrl,
     required this.isLast,
+    required this.isOversold,
   });
 
   @override
   Widget build(BuildContext context) {
+    final rsiColor = isOversold
+        ? const Color(0xFF22C55E) // green — oversold
+        : const Color(0xFFEF4444); // red — overbought
     return Column(
       children: [
         Padding(
@@ -228,10 +250,10 @@ class _SignalItem extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       'RSI: ${signal['rsi']}',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF00C853),
+                        color: rsiColor,
                       ),
                     ),
                   ],

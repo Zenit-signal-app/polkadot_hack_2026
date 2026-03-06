@@ -4,10 +4,10 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/store/user_store.dart';
 import '../../../../core/store/favorite_store.dart';
+import '../../../../shared/widgets/trading_view_chart.dart';
 import '../../data/models/token_model.dart';
 import '../../data/services/favorite_service.dart';
 import '../../data/services/token_service.dart';
-import '../widgets/candle_chart_widget.dart';
 import '../widgets/line_chart_widget.dart';
 import '../widgets/price_section_widget.dart';
 import '../widgets/stats_section_widget.dart';
@@ -192,51 +192,59 @@ class _TokenInfoScreenState extends State<TokenInfoScreen> {
                     
                     const SizedBox(height: 24),
                     
-                    // Chart Section (keep old data visible while loading)
-                    Stack(
-                      children: [
-                        // Chart (always visible with current data)
-                        _selectedChartType == ChartType.line
-                            ? LineChartWidget(
-                                chartData: currentToken.chartData,
-                                isPriceUp: currentToken.isPriceUp,
-                              )
-                            : CandleChartWidget(
-                                chartData: currentToken.chartData,
-                              ),
-                        // Loading overlay
-                        if (_isLoadingChart)
-                          Positioned.fill(
-                            child: Container(
-                              color: const Color(0xFF0A1628).withOpacity(0.6),
-                              child: const Center(
-                                child: SizedBox(
-                                  width: 24,
-                                  height: 24,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
+                    // Chart Section
+                    if (_selectedChartType == ChartType.candle)
+                      // TradingView chart – has its own timeframe/tool controls.
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: TradingViewChart(
+                          symbol: currentToken.symbol,
+                          indicators: const [TradingViewIndicator.volume],
+                          height: 400,
+                        ),
+                      )
+                    else
+                      Stack(
+                        children: [
+                          LineChartWidget(
+                            chartData: currentToken.chartData,
+                            isPriceUp: currentToken.isPriceUp,
+                          ),
+                          if (_isLoadingChart)
+                            Positioned.fill(
+                              child: Container(
+                                color: const Color(0xFF0A1628).withValues(alpha: 0.6),
+                                child: const Center(
+                                  child: SizedBox(
+                                    width: 24,
+                                    height: 24,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
-                      ],
-                    ),
+                        ],
+                      ),
                     
                     const SizedBox(height: 24),
                     
-                    // Time Frame Buttons
-                    TimeFrameButtonsWidget(
-                      selectedTimeFrame: _selectedTimeFrame,
-                      onTimeFrameChanged: (timeFrame) {
-                        setState(() {
-                          _selectedTimeFrame = timeFrame;
-                        });
-                        _loadChartData();
-                      },
-                    ),
+                    // Time Frame Buttons – hidden in TradingView mode
+                    // (TradingView widget has its own built-in controls).
+                    if (_selectedChartType != ChartType.candle)
+                      TimeFrameButtonsWidget(
+                        selectedTimeFrame: _selectedTimeFrame,
+                        onTimeFrameChanged: (timeFrame) {
+                          setState(() {
+                            _selectedTimeFrame = timeFrame;
+                          });
+                          _loadChartData();
+                        },
+                      ),
                     
-                    const SizedBox(height: 24),
+                    if (_selectedChartType != ChartType.candle)
+                      const SizedBox(height: 24),
                     
                     // Stats Section
                     StatsSectionWidget(

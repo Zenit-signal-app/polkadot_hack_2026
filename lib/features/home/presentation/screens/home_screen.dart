@@ -5,19 +5,18 @@ import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'dart:io' show Platform;
 
 import '../../../../core/ads/admob_config.dart';
+import '../../../../core/ads/admob_store.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/store/favorite_store.dart';
 import '../../../../core/store/token_store.dart';
 import '../../../../core/store/user_store.dart';
-import '../../../../routes/app_routes.dart';
 import '../../../../shared/widgets/layout/header_bar.dart';
 import '../../data/services/favorite_service.dart';
 import '../../data/services/token_service.dart';
 import '../bloc/price_bloc.dart';
 import '../bloc/price_event.dart';
-import '../bloc/price_state.dart';
-import '../widgets/token_price_card.dart';
+import '../widgets/token_price_list.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -52,27 +51,22 @@ class _HomeScreenState extends State<HomeScreen> {
     _priceBloc.add(const HydrateTokensFromStore());
     _scrollController.addListener(_onScroll);
     _loadBannerAd();
-    // Connect to socket (optional - comment out if you don't have a socket server)
-    // _priceBloc.add(const ConnectToPriceSocket());
   }
 
   void _loadBannerAd() {
-    if (kIsWeb) {
-      return;
-    }
+    if (kIsWeb) return;
+    if (kDebugMode) return; // Only show ads in release builds.
+    if (!Platform.isAndroid && !Platform.isIOS) return;
 
-    String adUnitId;
-    if (Platform.isAndroid) {
-      adUnitId = kDebugMode
-          ? 'ca-app-pub-3940256099942544/6300978111'
-          : AdMobConfig.bannerAdUnitIdAndroid;
-    } else if (Platform.isIOS) {
-      adUnitId = kDebugMode
-          ? 'ca-app-pub-3940256099942544/2934735716'
-          : AdMobConfig.bannerAdUnitIdIos;
-    } else {
-      return;
-    }
+    final adUnitId = context.read<AdmobStore>().resolveUnitId(
+          adType: 'banner',
+          debugFallback: Platform.isIOS
+              ? AdMobConfig.testBannerIos
+              : AdMobConfig.testBannerAndroid,
+          releaseFallback: Platform.isIOS
+              ? AdMobConfig.bannerAdUnitIdIos
+              : AdMobConfig.bannerAdUnitIdAndroid,
+        );
 
     _bannerAd?.dispose();
 
@@ -375,102 +369,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       ],
                     ),
                   ),
-                  BlocBuilder<PriceBloc, PriceState>(
-                    bloc: _priceBloc,
-                    builder: (context, state) {
-                      if (state.status == PriceStatus.error) {
-                        return Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Text(
-                            state.errorMessage ?? 'Failed to load tokens',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: Colors.redAccent),
-                          ),
-                        );
-                      }
-
-                      if (state.status == PriceStatus.loading &&
-                          state.tokenList.isEmpty) {
-                        return const Padding(
-                          padding: EdgeInsets.all(24),
-                          child: CircularProgressIndicator(),
-                        );
-                      }
-
-                      if (state.tokenList.isEmpty) {
-                        return const Padding(
-                          padding: EdgeInsets.all(24),
-                          child: Text(
-                            'No tokens available',
-                            style: TextStyle(color: Colors.white70),
-                          ),
-                        );
-                      }
-
-                      final isLoadingMore =
-                          state.status == PriceStatus.loading &&
-                              state.tokenList.isNotEmpty;
-
-                      final filteredTokens = _selectedTabIndex == 1
-                          ? state.tokenList
-                              .where((token) =>
-                                  _favoriteSymbols.contains(token.symbol))
-                              .toList()
-                          : state.tokenList;
-
-                      if (_selectedTabIndex == 1 && _isFavoriteLoading) {
-                        return const Padding(
-                          padding: EdgeInsets.all(24),
-                          child: CircularProgressIndicator(),
-                        );
-                      }
-
-                      if (_selectedTabIndex == 1 && filteredTokens.isEmpty) {
-                        return const Padding(
-                          padding: EdgeInsets.all(24),
-                          child: Text(
-                            'No favorite tokens',
-                            style: TextStyle(color: Colors.white70),
-                          ),
-                        );
-                      }
-
-                      return ListView.separated(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        itemCount:
-                            filteredTokens.length +
-                                (isLoadingMore && _selectedTabIndex == 0 ? 1 : 0),
-                        separatorBuilder: (context, index) => const SizedBox(height: 12),
-                        itemBuilder: (context, index) {
-                          if (isLoadingMore &&
-                              _selectedTabIndex == 0 &&
-                              index == filteredTokens.length) {
-                            return const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 12),
-                              child: Center(child: CircularProgressIndicator()),
-                            );
-                          }
-
-                          final token = filteredTokens[index];
-                          return TokenPriceCard(
-                            token: token,
-                            onTap: () {
-                              Navigator.of(context).pushNamed(
-                                AppRoutes.tokenInfo,
-                                arguments: token,
-                              );
-                            },
-                            onVisible: () {
-                              _priceBloc.add(
-                                LoadTokenChartHistory(symbol: token.symbol),
-                              );
-                            },
-                          );
-                        },
-                      );
-                    },
+                  TokenPriceList(
+                    priceBloc: _priceBloc,
+                    selectedTabIndex: _selectedTabIndex,
+                    favoriteSymbols: _favoriteSymbols,
+                    isFavoriteLoading: _isFavoriteLoading,
                   ),
                   const SizedBox(height: 20),
                 ],

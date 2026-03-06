@@ -77,11 +77,14 @@ class TokenPriceCard extends StatelessWidget {
 
               const SizedBox(width: 16),
 
-              PriceDisplayWidget(
-                price: token.currentPrice,
-                decimals: token.decimals,
-                priceChangePercentage: token.priceChangePercentage,
-                isPriceUp: token.isPriceUp,
+              SizedBox(
+                width: 112,
+                child: PriceDisplayWidget(
+                  price: token.currentPrice,
+                  decimals: token.decimals,
+                  priceChangePercentage: token.priceChangePercentage,
+                  isPriceUp: token.isPriceUp,
+                ),
               ),
             ],
           ),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:seerbot_signal/core/utils/price_formatter.dart';
 import '../../data/models/token_model.dart';
 import 'chart_type_buttons_widget.dart';
 
@@ -20,8 +21,8 @@ class PriceSectionWidget extends StatelessWidget {
     final priceColor = token.isPriceUp
         ? const Color(0xFF00C853)
         : const Color(0xFFFF1744);
-    final formattedPrice = NumberFormat('\$#,##0').format(token.currentPrice);
-    final formattedChange = NumberFormat('\$#,##0.0000').format(token.priceChange);
+    final formattedPrice = numberFormatter(token.currentPrice);
+    final formattedChange =numberFormatter(token.priceChange);
     final formattedPercentage = NumberFormat('0.00').format(
       token.priceChangePercentage.abs(),
     );

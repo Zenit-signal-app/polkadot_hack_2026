@@ -5,6 +5,7 @@ import 'package:bloc/bloc.dart';
 import '../../../../core/store/token_store.dart';
 import '../../data/models/token_model.dart';
 import '../../data/models/token_list_item_model.dart';
+import '../../data/models/ohlcv_snapshot_model.dart';
 import '../../data/services/price_socket_service.dart';
 import '../../data/services/token_service.dart';
 import 'price_event.dart';
@@ -44,15 +45,11 @@ class PriceBloc extends Bloc<PriceEvent, PriceState> {
     on<LoadMoreTokens>(_onLoadMoreTokens);
     on<LoadTokenChartHistory>(_onLoadTokenChartHistory);
     on<ConnectionStatusChanged>(_onConnectionStatusChanged);
+    on<OhlcvSnapshotReceived>(_onOhlcvSnapshotReceived);
 
-    // Listen to price updates from socket
-    _priceSubscription = _socketService.priceStream.listen((priceUpdate) {
-      add(PriceUpdated(
-        symbol: priceUpdate.symbol,
-        price: priceUpdate.price,
-        priceChange: priceUpdate.priceChange,
-        priceChangePercentage: priceUpdate.priceChangePercentage,
-      ));
+    // Listen to OHLCV snapshots from the /ohlcv WebSocket
+    _priceSubscription = _socketService.snapshotStream.listen((snapshot) {
+      add(OhlcvSnapshotReceived(snapshot));
     });
 
     // Listen to connection status
@@ -167,6 +164,11 @@ class PriceBloc extends Bloc<PriceEvent, PriceState> {
       };
 
       emit(state.copyWith(status: PriceStatus.initial, tokens: mapped));
+
+      // Auto-connect socket once we have tokens.
+      if (mapped.isNotEmpty && !_socketService.isConnected) {
+        unawaited(_socketService.connect());
+      }
     } catch (e) {
       log('LoadInitialTokens error: $e');
       emit(state.copyWith(
@@ -190,6 +192,11 @@ class PriceBloc extends Bloc<PriceEvent, PriceState> {
     };
 
     emit(state.copyWith(status: PriceStatus.initial, tokens: mapped));
+
+    // Auto-connect socket once we have tokens.
+    if (mapped.isNotEmpty && !_socketService.isConnected) {
+      unawaited(_socketService.connect());
+    }
   }
 
   Future<void> _onLoadMoreTokens(
@@ -381,6 +388,81 @@ class PriceBloc extends Bloc<PriceEvent, PriceState> {
       isConnected: event.isConnected,
       status: event.isConnected ? PriceStatus.connected : PriceStatus.disconnected,
     ));
+  }
+
+  /// Bulk-updates token prices from a full OHLCV snapshot.
+  /// Derives priceChange / priceChangePercentage from candle open→close
+  /// (preference order: 1d > 4h > 1h > 30m > 5m > 1m).
+  /// Uses Equatable equality on TokenModel to skip unchanged entries and
+  /// avoid emitting a new state when nothing actually changed.
+  void _onOhlcvSnapshotReceived(
+    OhlcvSnapshotReceived event,
+    Emitter<PriceState> emit,
+  ) {
+    log('[PriceBloc] snapshot received: ${event.snapshot.data.length} symbols, state has ${state.tokens.length} tokens');
+    final updatedTokens = Map<String, TokenModel>.from(state.tokens);
+    bool changed = false;
+    int matched = 0;
+    int skipped = 0;
+    int noClose = 0;
+
+    for (final entry in event.snapshot.data.entries) {
+      final symbol = entry.key;
+      final OhlcvSymbolData symbolData = entry.value;
+      final currentToken = updatedTokens[symbol];
+      if (currentToken == null) {
+        skipped++;
+        continue;
+      }
+
+      final closePrice = symbolData.closePrice;
+      if (closePrice == null) {
+        log('[PriceBloc] $symbol: closePrice is null, availableTFs=${symbolData.availableTimeframes}');
+        noClose++;
+        continue;
+      }
+      log('[PriceBloc] $symbol: closePrice=$closePrice tf=${symbolData.availableTimeframes} (was ${currentToken.currentPrice})');
+
+      // Derive price change from the best available timeframe candle.
+      double priceChange = currentToken.priceChange;
+      double priceChangePercentage = currentToken.priceChangePercentage;
+      final candles = symbolData.candles;
+      if (candles != null) {
+        const priority = ['1d', '4h', '1h', '30m', '5m', '1m'];
+        for (final tf in priority) {
+          final candle = candles[tf];
+          if (candle != null && candle.open != 0) {
+            priceChange = candle.close - candle.open;
+            priceChangePercentage = (priceChange / candle.open) * 100;
+            break;
+          }
+        }
+      }
+
+      final updated = currentToken.copyWith(
+        currentPrice: closePrice,
+        priceChange: priceChange,
+        priceChangePercentage: priceChangePercentage,
+        lastUpdated: DateTime.fromMillisecondsSinceEpoch(
+          (symbolData.timestamp * 1000).toInt(),
+        ),
+      );
+
+      // Skip if nothing changed (Equatable comparison).
+      if (updated == currentToken) {
+        log('[PriceBloc] $symbol: no change (Equatable equal), skipping');
+        continue;
+      }
+
+      updatedTokens[symbol] = updated;
+      changed = true;
+      matched++;
+    }
+
+    log('[PriceBloc] snapshot done: matched=$matched noClose=$noClose skipped(notInState)=$skipped changed=$changed');
+    if (changed) {
+      emit(state.copyWith(tokens: updatedTokens));
+    }
   }
 
   @override

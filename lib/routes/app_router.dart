@@ -10,6 +10,7 @@ import '../features/splash/presentation/splash_screen.dart';
 import '../features/analysis/presentation/screens/indicator_detail_screen.dart';
 import '../features/analysis/data/models/indicator_model.dart';
 import '../features/ai/presentation/screens/ai_chat_screen.dart';
+import '../features/notifications/presentation/notifications_screen.dart';
 
 class AppRouter {
   static Route<dynamic> onGenerateRoute(RouteSettings settings) {
@@ -64,6 +65,11 @@ class AppRouter {
         }
         return MaterialPageRoute(
           builder: (_) => TokenInfoScreen(token: token),
+          settings: settings,
+        );
+      case AppRoutes.notifications:
+        return MaterialPageRoute(
+          builder: (_) => const NotificationsScreen(),
           settings: settings,
         );
       case AppRoutes.indicatorDetail:

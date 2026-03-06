@@ -12,6 +12,7 @@ import 'core/store/user_store.dart';
 import 'core/store/token_store.dart';
 import 'core/store/favorite_store.dart';
 import 'core/store/chat_store.dart';
+import 'core/ads/admob_store.dart';
 import 'core/constants/app_colors.dart';
 import 'core/services/notification_service.dart';
 import 'routes/app_router.dart';
@@ -76,6 +77,7 @@ class MyApp extends StatelessWidget {
           BlocProvider(create: (_) => TokenStore()),
           BlocProvider(create: (_) => FavoriteStore()),
           BlocProvider(create: (_) => ChatStore()),
+          BlocProvider(create: (_) => AdmobStore()),
         ],
         child: const _AppRoot(),
       ),
@@ -83,8 +85,21 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class _AppRoot extends StatelessWidget {
+class _AppRoot extends StatefulWidget {
   const _AppRoot();
+
+  @override
+  State<_AppRoot> createState() => _AppRootState();
+}
+
+class _AppRootState extends State<_AppRoot> {
+  @override
+  void initState() {
+    super.initState();
+    // Load remote AdMob config as early as possible.
+    // No auth token needed — the endpoint is public.
+    context.read<AdmobStore>().load();
+  }
 
   @override
   Widget build(BuildContext context) {

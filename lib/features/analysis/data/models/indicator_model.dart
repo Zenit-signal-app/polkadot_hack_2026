@@ -55,6 +55,15 @@ class IndicatorModel {
 
   bool get isConfluence => type == SignalToolType.confluence;
 
+  /// List of tool codes declared in metadata["uses"], e.g. ["rsi_heatmap"].
+  List<String> get uses {
+    final raw = metadata['uses'];
+    if (raw is List) {
+      return raw.whereType<String>().toList();
+    }
+    return const [];
+  }
+
   String get resolvedIconPath {
     if (iconPath.isEmpty) {
       return '';

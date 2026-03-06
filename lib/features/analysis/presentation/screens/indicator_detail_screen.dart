@@ -1,15 +1,25 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/network/api_client.dart';
+import '../../../../core/store/token_store.dart';
+import '../../../../core/store/user_store.dart';
+import '../../../../features/home/data/models/ohlcv_snapshot_model.dart';
+import '../../../../features/home/data/models/token_list_item_model.dart';
 import '../../../../features/home/data/models/token_model.dart';
+import '../../../../features/home/data/services/price_socket_service.dart';
+import '../../../../features/home/data/services/token_service.dart';
 import '../../../../routes/app_routes.dart';
 import '../../../../shared/widgets/layout/bottom_nav_bar.dart';
 import '../../../../shared/widgets/layout/detail_header_bar.dart';
 import '../../../../shared/widgets/token_selector_bottom_sheet.dart';
 import '../../data/models/indicator_model.dart';
-import '../widgets/rsi_heatmap_chart.dart';
-import '../widgets/rsi_line_chart.dart';
-import '../widgets/rsi_tabs_with_signals.dart';
+import '../widgets/adx_chart_section.dart';
+import '../widgets/overbought_oversold_section.dart';
+import '../widgets/rsi_heatmap_section.dart';
 import '../widgets/token_price_section.dart';
 
 class IndicatorDetailScreen extends StatefulWidget {
@@ -22,58 +32,164 @@ class IndicatorDetailScreen extends StatefulWidget {
 }
 
 class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
+  late TokenService _tokenService;
+  final PriceSocketService _socketService = PriceSocketService();
+  StreamSubscription<OhlcvSnapshotMessage>? _socketSubscription;
+
   late TokenModel _selectedToken;
   bool _isFavorite = false;
 
-  // Mock token data
-  final List<TokenModel> _availableTokens = [
-    TokenModel(
-      symbol: 'BTC',
-      name: 'Bitcoin',
-      pair: 'BTCUSDT',
-      imageUrl: 'https://cryptologos.cc/logos/bitcoin-btc-logo.png',
-      currentPrice: 69285.00,
-      priceChange: 1045.00,
-      priceChangePercentage: 1.53,
-      chartData: List.generate(20, (i) => 65000 + (i * 200).toDouble()),
-      lastUpdated: DateTime.now(),
-    ),
-    TokenModel(
-      symbol: 'ETH',
-      name: 'Ethereum',
-      pair: 'ETHUSDT',
-      imageUrl: 'https://cryptologos.cc/logos/ethereum-eth-logo.png',
-      currentPrice: 3245.50,
-      priceChange: -45.20,
-      priceChangePercentage: -1.37,
-      chartData: List.generate(20, (i) => 3200 + (i * 10).toDouble()),
-      lastUpdated: DateTime.now(),
-    ),
-    TokenModel(
-      symbol: 'BNB',
-      name: 'Binance Coin',
-      pair: 'BNBUSDT',
-      imageUrl: 'https://cryptologos.cc/logos/bnb-bnb-logo.png',
-      currentPrice: 425.80,
-      priceChange: 12.30,
-      priceChangePercentage: 2.97,
-      chartData: List.generate(20, (i) => 420 + (i * 2).toDouble()),
-      lastUpdated: DateTime.now(),
-    ),
-  ];
+  // Timeframe selector — supported values match the API.
+  String _timeframe = '15m';
 
-  // Mock signal data
-  final List<Map<String, dynamic>> _signals = [
-    {'pair': 'BTC/USDT', 'rsi': 23, 'date': '14.02.2026', 'time': '07:23:10'},
-    {'pair': 'BTC/USDT', 'rsi': 23, 'date': '14.02.2026', 'time': '07:23:10'},
-    {'pair': 'BTC/USDT', 'rsi': 23, 'date': '14.02.2026', 'time': '07:23:10'},
-    {'pair': 'BTC/USDT', 'rsi': 23, 'date': '14.02.2026', 'time': '07:23:10'},
-  ];
+  // Heatmap RSI type selector: 'rsi14' | 'rsi7'
+  String _heatmapRsiType = 'rsi14';
+
+  // Token list — loaded from TokenStore cache or API.
+  List<TokenModel> _availableTokens = [];
+
+  // Placeholder shown while tokens are loading so the screen doesn't crash.
+  static final TokenModel _placeholderToken = TokenModel(
+    symbol: 'BTC',
+    name: 'BTC',
+    pair: 'BTCUSDT',
+    imageUrl: '',
+    currentPrice: 0,
+    priceChange: 0,
+    priceChangePercentage: 0,
+    chartData: const [],
+    lastUpdated: DateTime(2020),
+  );
 
   @override
   void initState() {
     super.initState();
-    _selectedToken = _availableTokens[0];
+    _selectedToken = _placeholderToken;
+    final apiClient = ApiClient()
+      ..setAuthToken(context.read<UserStore>().state.accessToken);
+    _tokenService = TokenService(apiClient: apiClient);
+    _loadAvailableTokens();
+    _connectSocket();
+  }
+
+  @override
+  void dispose() {
+    _socketSubscription?.cancel();
+    _socketService.dispose();
+    super.dispose();
+  }
+
+  // ── Token list ───────────────────────────────────────────────────────────────
+
+  /// Loads the token list: uses the already-cached TokenStore if available,
+  /// otherwise fetches from the API. After loading, triggers data + price history.
+  Future<void> _loadAvailableTokens() async {
+    final storeItems = context.read<TokenStore>().state.items;
+    List<TokenModel> tokens;
+
+    if (storeItems.isNotEmpty) {
+      tokens = storeItems.map(_tokenFromListItem).toList();
+    } else {
+      try {
+        final fetched = await _tokenService.getTokens(limit: 200);
+        tokens = fetched.map(_tokenFromListItem).toList();
+      } catch (_) {
+        // Keep the placeholder so the screen stays usable.
+        tokens = [_placeholderToken];
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _availableTokens = tokens;
+      _selectedToken = tokens.first;
+    });
+    _loadPriceHistory();
+  }
+
+  /// Maps a [TokenListItemModel] (from store or API) to a [TokenModel].
+  static TokenModel _tokenFromListItem(TokenListItemModel item) {
+    return TokenModel(
+      symbol: item.coin,
+      name: item.coin,
+      pair: item.symbol,
+      imageUrl: item.image ?? '',
+      currentPrice: item.price,
+      decimals: item.decimals,
+      priceChange: item.priceChange,
+      priceChangePercentage: item.priceChangePercent,
+      chartData: const [],
+      lastUpdated: DateTime.now(),
+    );
+  }
+
+  // ── Price history ────────────────────────────────────────────────────────────
+
+  Future<void> _loadPriceHistory() async {
+    try {
+      final result = await _tokenService.getPriceHistory(
+        symbol: _selectedToken.pair,
+        timeframe: '1h',
+        limit: 24,
+      );
+      if (!mounted) return;
+      final close = result.close;
+      final open = result.open;
+      double priceChange = _selectedToken.priceChange;
+      double priceChangePct = _selectedToken.priceChangePercentage;
+      if (close != null && open != null && open != 0) {
+        priceChange = close - open;
+        priceChangePct = (priceChange / open) * 100;
+      }
+      setState(() {
+        _selectedToken = _selectedToken.copyWith(
+          currentPrice: close ?? _selectedToken.currentPrice,
+          priceChange: priceChange,
+          priceChangePercentage: priceChangePct,
+          chartData: result.prices.isNotEmpty ? result.prices : _selectedToken.chartData,
+        );
+      });
+    } catch (_) {
+      // Non-critical — token still shows with initial values.
+    }
+  }
+
+  // ── WebSocket ────────────────────────────────────────────────────────────────
+
+  Future<void> _connectSocket() async {
+    await _socketService.connect();
+    _socketSubscription = _socketService.snapshotStream.listen(_onSnapshot);
+  }
+
+  void _onSnapshot(OhlcvSnapshotMessage msg) {
+    final symbolData = msg.data[_selectedToken.pair];
+    if (symbolData == null) return;
+    final close = symbolData.closePrice;
+    if (close == null) return;
+    if (!mounted) return;
+    // Derive price change from candle open→close (1d preference).
+    final candles = symbolData.candles;
+    double priceChange = _selectedToken.priceChange;
+    double priceChangePct = _selectedToken.priceChangePercentage;
+    if (candles != null) {
+      const priority = ['1d', '4h', '1h', '30m', '5m', '1m'];
+      for (final tf in priority) {
+        final candle = candles[tf];
+        if (candle != null && candle.open != 0) {
+          priceChange = candle.close - candle.open;
+          priceChangePct = (priceChange / candle.open) * 100;
+          break;
+        }
+      }
+    }
+    setState(() {
+      _selectedToken = _selectedToken.copyWith(
+        currentPrice: close,
+        priceChange: priceChange,
+        priceChangePercentage: priceChangePct,
+        lastUpdated: DateTime.now(),
+      );
+    });
   }
 
   void _showTokenSelector() {
@@ -88,6 +204,7 @@ class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
           setState(() {
             _selectedToken = token;
           });
+          _loadPriceHistory();
         },
       ),
     );
@@ -100,27 +217,22 @@ class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // Header
+            // Fixed header
             DetailHeaderBar(title: widget.indicator.title),
 
-            // Content
+            // Scrollable content
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Token selector and price
-                  _buildTokenPriceSection(),
-
-                  const SizedBox(height: 24),
-
-                  // Header with indicator info
-                  _buildTabs(),
-
-                  const SizedBox(height: 24),
-
-                  // Heatmap content
-                  Expanded(child: _buildHeatmapTab()),
-                ],
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildTokenPriceSection(),
+                    const SizedBox(height: 24),
+                    _buildToolbar(),
+                    const SizedBox(height: 24),
+                    _buildContent(),
+                  ],
+                ),
               ),
             ),
           ],
@@ -159,15 +271,14 @@ class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
       selectedToken: _selectedToken,
       isFavorite: _isFavorite,
       onTokenSelectorTap: _showTokenSelector,
-      onFavoriteTap: () {
-        setState(() {
-          _isFavorite = !_isFavorite;
-        });
-      },
+      onFavoriteTap: () => setState(() => _isFavorite = !_isFavorite),
     );
   }
 
-  Widget _buildTabs() {
+  Widget _buildToolbar() {
+    final showHeatmap = widget.indicator.uses.contains('rsi_heatmap');
+    final rsiLabel = _heatmapRsiType == 'rsi14' ? 'RSI14' : 'RSI7';
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -179,7 +290,7 @@ class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(
-            'Heatmap for RSI indicator',
+            showHeatmap ? 'Heatmap for RSI indicator' : 'RSI indicator',
             style: const TextStyle(
               color: AppColors.white,
               fontSize: 12,
@@ -188,36 +299,16 @@ class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
           ),
           Row(
             children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: const Color.fromRGBO(22, 30, 51, 1),
-                  borderRadius: BorderRadius.circular(6),
+              if (showHeatmap)
+                _RsiTypeDropdown(
+                  selected: _heatmapRsiType,
+                  label: rsiLabel,
+                  onChanged: (value) => setState(() => _heatmapRsiType = value),
                 ),
-                child: const Text(
-                  'ADX14',
-                  style: TextStyle(
-                    color: AppColors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: const Color.fromRGBO(22, 30, 51, 1),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Text(
-                  '30m',
-                  style: TextStyle(
-                    color: AppColors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
+              if (showHeatmap) const SizedBox(width: 8),
+              _TimeframeDropdown(
+                selected: _timeframe,
+                onChanged: (value) => setState(() => _timeframe = value),
               ),
             ],
           ),
@@ -226,89 +317,252 @@ class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
     );
   }
 
-  Widget _buildHeatmapTab() {
-    // Mock RSI token data
-    final rsiTokens = [
-      RsiTokenPoint(
-        symbol: 'BTC',
-        imageUrl: 'https://cryptologos.cc/logos/bitcoin-btc-logo.png',
-        rsiValue: 85,
-        xPosition: 0.3,
-        color: const Color(0xFFF59E0B),
-      ),
-      RsiTokenPoint(
-        symbol: 'ETH',
-        imageUrl: 'https://cryptologos.cc/logos/ethereum-eth-logo.png',
-        rsiValue: 78,
-        xPosition: 0.55,
-        color: const Color(0xFF627EEA),
-      ),
-      RsiTokenPoint(
-        symbol: 'DOT',
-        imageUrl: 'https://cryptologos.cc/logos/polkadot-new-dot-logo.png',
-        rsiValue: 52,
-        xPosition: 0.15,
-        color: const Color(0xFFE6007A),
-      ),
-      RsiTokenPoint(
-        symbol: 'LINK',
-        imageUrl: 'https://cryptologos.cc/logos/chainlink-link-logo.png',
-        rsiValue: 42,
-        xPosition: 0.75,
-        color: const Color(0xFF2A5ADA),
-      ),
-      RsiTokenPoint(
-        symbol: 'MATIC',
-        imageUrl: 'https://cryptologos.cc/logos/polygon-matic-logo.png',
-        rsiValue: 38,
-        xPosition: 0.68,
-        color: const Color(0xFF8247E5),
-      ),
-    ];
+  /// Renders the correct section components based on [indicator.uses].
+  Widget _buildContent() {
+    final uses = widget.indicator.uses
+        .where((u) => u != 'default_length')
+        .toSet();
 
-    return SingleChildScrollView(
+    final showHeatmap = uses.contains('rsi_heatmap');
+    final showAdx = uses.contains('adx');
+    // RSI oversold/overbought shown for default indicators and heatmap indicators.
+    final showRsi = uses.isEmpty || showHeatmap;
+
+    return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SizedBox(height: 16),
-          // RSI Heatmap Chart
-          RsiHeatmapChart(tokens: rsiTokens, height: 500),
-          const SizedBox(height: 16),
-          // RSI Line Chart
-          RsiLineChart(
-            rsiData: const [
-              45,
-              52,
-              58,
-              65,
-              72,
-              78,
-              75,
-              68,
-              62,
-              55,
-              48,
-              42,
-              38,
-              35,
-              40,
-              48,
-              55,
-              62,
-              68,
-              72,
-            ],
-            height: 180,
-            lineColor: const Color(0xFF3B82F6),
-          ),
-          const SizedBox(height: 16),
-          // Over sold / Over bought tabs with signal list
-          RsiTabsWithSignals(
-            signals: _signals,
-            tokenImageUrl: _selectedToken.imageUrl,
-          ),
+
+          // ── RSI Heatmap bubbles ──────────────────────────────────────────
+          if (showHeatmap) ...[
+            RsiHeatmapSection(
+              timeframe: _timeframe,
+              heatmapRsiType: _heatmapRsiType,
+            ),
+            const SizedBox(height: 24),
+          ],
+
+          // ── RSI line charts + oversold/overbought signal list ────────────
+          if (showRsi)
+            OverboughtOversoldSection(
+              symbol: _selectedToken.pair,
+              timeframe: _timeframe,
+              indicatorCode: widget.indicator.code,
+              tokenImageUrl: _selectedToken.imageUrl,
+              tokenShortSymbol: _selectedToken.symbol,
+            ),
+
+          // ── ADX chart ────────────────────────────────────────────────────
+          if (showAdx) ...[
+            if (showRsi) const SizedBox(height: 24),
+            AdxChartSection(
+              symbol: _selectedToken.pair,
+              timeframe: _timeframe,
+            ),
+          ],
+
           const SizedBox(height: 24),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Toolbar dropdown widgets ─────────────────────────────────────────────────
+
+class _TimeframeDropdown extends StatelessWidget {
+  final String selected;
+  final ValueChanged<String> onChanged;
+
+  const _TimeframeDropdown({
+    required this.selected,
+    required this.onChanged,
+  });
+
+  static const _options = ['1m', '5m', '15m', '1h', '4h', '1D'];
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => _showMenu(context),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color.fromRGBO(22, 30, 51, 1),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              selected,
+              style: const TextStyle(
+                color: AppColors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(width: 4),
+            const Icon(
+              Icons.keyboard_arrow_down_rounded,
+              color: AppColors.white,
+              size: 14,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showMenu(BuildContext context) {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final offset = box.localToGlobal(Offset.zero);
+    final size = box.size;
+
+    showMenu<String>(
+      context: context,
+      color: const Color(0xFF1A2332),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      position: RelativeRect.fromLTRB(
+        offset.dx,
+        offset.dy + size.height + 4,
+        offset.dx + size.width,
+        0,
+      ),
+      items: _options
+          .map((tf) => _menuItem(tf, tf == selected))
+          .toList(),
+    ).then((value) {
+      if (value != null && value != selected) {
+        onChanged(value);
+      }
+    });
+  }
+
+  PopupMenuItem<String> _menuItem(String value, bool isSelected) {
+    return PopupMenuItem<String>(
+      value: value,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            value,
+            style: TextStyle(
+              color: isSelected ? const Color(0xFF3B82F6) : Colors.white,
+              fontSize: 13,
+              fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+            ),
+          ),
+          if (isSelected)
+            const Icon(
+              Icons.check_rounded,
+              color: Color(0xFF3B82F6),
+              size: 16,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RsiTypeDropdown extends StatelessWidget {
+  final String selected;
+  final String label;
+  final ValueChanged<String> onChanged;
+
+  const _RsiTypeDropdown({
+    required this.selected,
+    required this.label,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => _showMenu(context),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color.fromRGBO(22, 30, 51, 1),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: const Color(0xFF3B82F6).withValues(alpha: 0.4),
+            width: 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: const TextStyle(
+                color: Color(0xFF3B82F6),
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 4),
+            const Icon(
+              Icons.keyboard_arrow_down_rounded,
+              color: Color(0xFF3B82F6),
+              size: 14,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showMenu(BuildContext context) {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final offset = box.localToGlobal(Offset.zero);
+    final size = box.size;
+
+    showMenu<String>(
+      context: context,
+      color: const Color(0xFF1A2332),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      position: RelativeRect.fromLTRB(
+        offset.dx,
+        offset.dy + size.height + 4,
+        offset.dx + size.width,
+        0,
+      ),
+      items: [
+        _menuItem('rsi14', 'RSI14', selected == 'rsi14'),
+        _menuItem('rsi7', 'RSI7', selected == 'rsi7'),
+      ],
+    ).then((value) {
+      if (value != null && value != selected) {
+        onChanged(value);
+      }
+    });
+  }
+
+  PopupMenuItem<String> _menuItem(String value, String text, bool isSelected) {
+    return PopupMenuItem<String>(
+      value: value,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            text,
+            style: TextStyle(
+              color: isSelected ? const Color(0xFF3B82F6) : Colors.white,
+              fontSize: 13,
+              fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+            ),
+          ),
+          if (isSelected)
+            const Icon(
+              Icons.check_rounded,
+              color: Color(0xFF3B82F6),
+              size: 16,
+            ),
         ],
       ),
     );
