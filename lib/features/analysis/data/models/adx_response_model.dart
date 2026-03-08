@@ -3,12 +3,14 @@ class AdxRecord {
   final double? adx;
   final double? diPlus;
   final double? diMinus;
+  final String? trend;
 
   const AdxRecord({
     required this.openTime,
     this.adx,
     this.diPlus,
     this.diMinus,
+    this.trend,
   });
 
   factory AdxRecord.fromJson(Map<String, dynamic> json) {
@@ -17,6 +19,7 @@ class AdxRecord {
       adx: (json['adx'] as num?)?.toDouble(),
       diPlus: (json['di_plus'] as num?)?.toDouble(),
       diMinus: (json['di_minus'] as num?)?.toDouble(),
+      trend: json['trend']?.toString(),
     );
   }
 

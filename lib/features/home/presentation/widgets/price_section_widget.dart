@@ -79,14 +79,6 @@ class PriceSectionWidget extends StatelessWidget {
               ),
             ],
           ),
-          Text(
-            'USD',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w400,
-              color: Colors.white.withOpacity(0.5),
-            ),
-          ),
         ],
       ),
     );

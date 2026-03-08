@@ -133,6 +133,7 @@ class _OverboughtOversoldSectionState extends State<OverboughtOversoldSection> {
             symbol: widget.symbol,
             timeframe: widget.timeframe,
             tokenImageUrl: widget.tokenImageUrl,
+            code: widget.indicatorCode,
           ),
       ],
     );

@@ -36,16 +36,21 @@ class _TokenInfoScreenState extends State<TokenInfoScreen> {
   
   bool _isLoadingFavorite = false;
   bool _isLoadingChart = false;
+  bool _isLoadingToken = false;
   String _selectedTimeFrame = '1D';
+  String _selectedTradingViewTimeFrame = '1H';
   ChartType _selectedChartType = ChartType.line;
   List<double> _chartData = [];
   double _priceChange = 0;
   double _priceChangePercentage = 0;
+  double _currentPrice = 0;
   
   // Stats from API
   double? _high;
   double? _low;
   double? _volume;
+  double? _quoteVolume;
+  String? _imageUrl;
 
   @override
   void initState() {
@@ -57,12 +62,15 @@ class _TokenInfoScreenState extends State<TokenInfoScreen> {
     _chartData = widget.token.chartData;
     _priceChange = widget.token.priceChange;
     _priceChangePercentage = widget.token.priceChangePercentage;
+    _currentPrice = widget.token.currentPrice;
 
+    _loadTokenData();
     _loadChartData();
 
     // Nếu FavoriteStore chưa được load (null), fetch từ API
     // Xảy ra khi user nhảy thẳng vào token detail mà chưa qua tab favorites
-    if (!context.read<FavoriteStore>().state.isLoaded) {
+    final isLoggedIn = context.read<UserStore>().state.isLoggedIn;
+    if (isLoggedIn && !context.read<FavoriteStore>().state.isLoaded) {
       _fetchFavorites();
     }
   }
@@ -76,6 +84,37 @@ class _TokenInfoScreenState extends State<TokenInfoScreen> {
       }
     } catch (_) {
       // Non-critical: nếu lỗi thì hiển thị icon mặc định (không favorite)
+    }
+  }
+
+  /// Load token data from API
+  Future<void> _loadTokenData() async {
+    if (_isLoadingToken) return;
+    
+    setState(() {
+      _isLoadingToken = true;
+    });
+    
+    try {
+      final tokenData = await _tokenService.getTokenBySymbol(widget.token.symbol);
+      
+      if (mounted) {
+        setState(() {
+          _currentPrice = tokenData.price;
+          _priceChange = tokenData.priceChange;
+          _priceChangePercentage = tokenData.priceChangePercent;
+          _volume = tokenData.volume;
+          _quoteVolume = tokenData.quoteVolume;
+          _imageUrl = tokenData.image;
+          _isLoadingToken = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoadingToken = false;
+        });
+      }
     }
   }
   
@@ -96,6 +135,28 @@ class _TokenInfoScreenState extends State<TokenInfoScreen> {
         return '3M';
       default:
         return '1d';
+    }
+  }
+  
+  /// Maps UI timeframe to TradingView minutes
+  int _mapTradingViewTimeFrameToMinutes(String uiTimeFrame) {
+    switch (uiTimeFrame) {
+      case '1m':
+        return 1;
+      case '5m':
+        return 5;
+      case '15m':
+        return 15;
+      case '1H':
+        return 60;
+      case '4H':
+        return 240;
+      case '1D':
+        return 1440;
+      case '1W':
+        return 10080;
+      default:
+        return 60;
     }
   }
   
@@ -149,6 +210,7 @@ class _TokenInfoScreenState extends State<TokenInfoScreen> {
   @override
   Widget build(BuildContext context) {
     final currentToken = widget.token.copyWith(
+      currentPrice: _currentPrice,
       chartData: _chartData,
       priceChange: _priceChange,
       priceChangePercentage: _priceChangePercentage,
@@ -166,7 +228,7 @@ class _TokenInfoScreenState extends State<TokenInfoScreen> {
             // Header
             TokenDetailHeader(
               symbol: widget.token.symbol,
-              imageUrl: widget.token.imageUrl,
+              imageUrl: _imageUrl ?? widget.token.imageUrl,
               isFavorite: isFavorite,
               onFavoriteTap: () => _handleFavoriteTap(isFavorite),
               onBackTap: () => Navigator.of(context).pop(),
@@ -193,17 +255,21 @@ class _TokenInfoScreenState extends State<TokenInfoScreen> {
                     const SizedBox(height: 24),
                     
                     // Chart Section
-                    if (_selectedChartType == ChartType.candle)
-                      // TradingView chart – has its own timeframe/tool controls.
+                    if (_selectedChartType == ChartType.candle) ...[
+                      // TradingView Timeframe Buttons
+                      _buildTradingViewTimeFrameButtons(),
+                      const SizedBox(height: 16),
+                      // TradingView chart
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: TradingViewChart(
                           symbol: currentToken.symbol,
                           indicators: const [TradingViewIndicator.volume],
+                          timeframe: _mapTradingViewTimeFrameToMinutes(_selectedTradingViewTimeFrame),
                           height: 400,
                         ),
-                      )
-                    else
+                      ),
+                    ] else
                       Stack(
                         children: [
                           LineChartWidget(
@@ -252,6 +318,7 @@ class _TokenInfoScreenState extends State<TokenInfoScreen> {
                       high: _high,
                       low: _low,
                       volume: _volume,
+                      quoteVolume: _quoteVolume,
                     ),
                     
                     const SizedBox(height: 24),
@@ -264,6 +331,47 @@ class _TokenInfoScreenState extends State<TokenInfoScreen> {
       ),
     );
       },
+    );
+  }
+  
+  Widget _buildTradingViewTimeFrameButtons() {
+    final timeFrames = ['1m', '5m', '15m', '1H', '4H', '1D', '1W'];
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: timeFrames.map((timeFrame) {
+          final isSelected = _selectedTradingViewTimeFrame == timeFrame;
+          return GestureDetector(
+            onTap: () {
+              setState(() {
+                _selectedTradingViewTimeFrame = timeFrame;
+              });
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: isSelected
+                    ? const Color(0xFF1E3A8A)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(20),
+                border: isSelected
+                    ? Border.all(color: const Color(0xFF3B82F6), width: 1)
+                    : null,
+              ),
+              child: Text(
+                timeFrame,
+                style: TextStyle(
+                  color: isSelected ? Colors.white : Colors.white.withOpacity(0.5),
+                  fontSize: 12,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
     );
   }
 

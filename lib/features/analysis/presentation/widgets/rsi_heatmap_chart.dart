@@ -3,14 +3,14 @@ import 'package:flutter/material.dart';
 /// Model cho token point trên RSI heatmap
 class RsiTokenPoint {
   final String symbol;
-  final String imageUrl;
+  final String image;
   final double rsiValue; // 0-100
   final double xPosition; // 0-1 (relative position)
   final Color color;
 
   RsiTokenPoint({
     required this.symbol,
-    required this.imageUrl,
+    required this.image,
     required this.rsiValue,
     required this.xPosition,
     required this.color,
@@ -126,7 +126,7 @@ class RsiHeatmapChart extends StatelessWidget {
       ),
       child: ClipOval(
         child: Image.network(
-          token.imageUrl,
+          token.image,
           fit: BoxFit.cover,
           errorBuilder: (context, error, stackTrace) {
             return Container(

@@ -97,8 +97,8 @@ class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
     _loadAvailableTokens();
     _connectSocket();
 
-    // Nếu FavoriteStore chưa được load (null), fetch từ API
-    if (!context.read<FavoriteStore>().state.isLoaded) {
+    final isLoggedIn = context.read<UserStore>().state.isLoggedIn;
+    if (isLoggedIn && !context.read<FavoriteStore>().state.isLoaded) {
       _fetchFavorites();
     }
   }
@@ -110,10 +110,6 @@ class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
     super.dispose();
   }
 
-  // ── Token list ───────────────────────────────────────────────────────────────
-
-  /// Loads the token list: uses the already-cached TokenStore if available,
-  /// otherwise fetches from the API. After loading, triggers data + price history.
   Future<void> _loadAvailableTokens() async {
     final storeItems = context.read<TokenStore>().state.items;
     List<TokenModel> tokens;
@@ -431,15 +427,62 @@ class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
 
     final widgets = <Widget>[];
 
-    // Map each 'use' to its corresponding widget
+    // Collect all TradingView indicators from uses to avoid duplicate webviews
+    final tradingViewIndicators = <TradingViewIndicator>[];
+    final otherWidgets = <Widget>[];
+
     for (final use in uses) {
-      final widget = _buildWidgetForUse(use);
-      if (widget != null) {
-        if (widgets.isNotEmpty) {
-          widgets.add(const SizedBox(height: 24));
-        }
-        widgets.add(widget);
+      switch (use) {
+        case 'adx':
+          tradingViewIndicators.add(TradingViewIndicator.adx);
+          // Add ADX line chart section separately
+          otherWidgets.add(AdxChartSection(
+            symbol: _selectedToken.pair,
+            timeframe: _timeframe,
+          ));
+          break;
+        case 'psar':
+          tradingViewIndicators.add(TradingViewIndicator.psar);
+          break;
+        case 'rsi_heatmap':
+        case 'heatmap':
+          otherWidgets.add(RsiHeatmapSection(
+            timeframe: _timeframe,
+            heatmapRsiType: _heatmapRsiType,
+          ));
+          break;
+        case 'adx_line':
+          otherWidgets.add(AdxChartSection(
+            symbol: _selectedToken.pair,
+            timeframe: _timeframe,
+          ));
+          break;
+        case 'candle_chart':
+          // Will be handled by TradingView chart with no indicators
+          break;
+        default:
+          break;
       }
+    }
+
+    // Render single TradingView chart with all indicators if any
+    if (tradingViewIndicators.isNotEmpty || uses.contains('candle_chart')) {
+      widgets.add(
+        TradingViewChart(
+          symbol: _selectedToken.pair,
+          indicators: tradingViewIndicators,
+          timeframe: _timeframeToMinutes(_timeframe),
+          height: 400,
+        ),
+      );
+    }
+
+    // Add other widgets
+    for (final widget in otherWidgets) {
+      if (widgets.isNotEmpty) {
+        widgets.add(const SizedBox(height: 24));
+      }
+      widgets.add(widget);
     }
 
     // RSI oversold/overbought shown for default indicators or rsi_heatmap
@@ -480,65 +523,11 @@ class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
           symbol: _selectedToken.pair,
           timeframe: _timeframe,
           tokenImageUrl: _selectedToken.imageUrl,
+          code: widget.indicator.code,
         ),
         const SizedBox(height: 24),
       ],
     );
-  }
-
-  /// Maps a single 'use' string to its corresponding widget.
-  Widget? _buildWidgetForUse(String use) {
-    switch (use) {
-      case 'rsi_heatmap':
-      case 'heatmap':
-        return RsiHeatmapSection(
-          timeframe: _timeframe,
-          heatmapRsiType: _heatmapRsiType,
-        );
-
-      case 'adx':
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TradingViewChart(
-              symbol: _selectedToken.pair,
-              indicators: const [TradingViewIndicator.adx],
-              timeframe: _timeframeToMinutes(_timeframe),
-              height: 400,
-            ),
-            const SizedBox(height: 24),
-            AdxChartSection(
-              symbol: _selectedToken.pair,
-              timeframe: _timeframe,
-            ),
-          ],
-        );
-
-      case 'adx_line':
-        return AdxChartSection(
-          symbol: _selectedToken.pair,
-          timeframe: _timeframe,
-        );
-
-      case 'candle_chart':
-        return TradingViewChart(
-          symbol: _selectedToken.pair,
-          indicators: const [],
-          timeframe: _timeframeToMinutes(_timeframe),
-          height: 400,
-        );
-
-      case 'psar':
-        return TradingViewChart(
-          symbol: _selectedToken.pair,
-          indicators: const [TradingViewIndicator.psar],
-          timeframe: _timeframeToMinutes(_timeframe),
-          height: 400,
-        );
-
-      default:
-        return null;
-    }
   }
 }
 

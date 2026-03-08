@@ -161,4 +161,25 @@ class TokenService {
       rethrow;
     }
   }
+
+  Future<TokenListItemModel> getTokenBySymbol(String symbol) async {
+    try {
+      final response = await _apiClient.get('tokens/$symbol');
+
+      Map<String, dynamic> tokenData;
+      if (response is Map<String, dynamic>) {
+        tokenData = response;
+      } else if (response is Map) {
+        tokenData = Map<String, dynamic>.from(response);
+      } else {
+        log('TokenService.getTokenBySymbol unexpected response format: $response');
+        throw const FormatException('Unexpected token response format');
+      }
+
+      return TokenListItemModel.fromJson(tokenData);
+    } catch (e, st) {
+      log('TokenService.getTokenBySymbol error: $e', stackTrace: st);
+      rethrow;
+    }
+  }
 }

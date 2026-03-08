@@ -13,6 +13,8 @@ import 'core/store/token_store.dart';
 import 'core/store/favorite_store.dart';
 import 'core/store/chat_store.dart';
 import 'core/ads/admob_store.dart';
+import 'core/ads/ad_manager_store.dart';
+import 'core/ads/app_lifecycle_reactor.dart';
 import 'core/constants/app_colors.dart';
 import 'core/services/notification_service.dart';
 import 'routes/app_router.dart';
@@ -46,8 +48,29 @@ Future<void> main() async {
   runApp(const MyApp());
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  late final AdmobStore _admobStore;
+  late final AdManagerStore _adManagerStore;
+
+  @override
+  void initState() {
+    super.initState();
+    _admobStore = AdmobStore();
+    _adManagerStore = AdManagerStore(_admobStore);
+  }
+
+  @override
+  void dispose() {
+    _adManagerStore.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -73,32 +96,85 @@ class MyApp extends StatelessWidget {
       ),
       home: MultiBlocProvider(
         providers: [
+          BlocProvider.value(value: _admobStore),
           BlocProvider(create: (_) => UserStore()),
           BlocProvider(create: (_) => TokenStore()),
           BlocProvider(create: (_) => FavoriteStore()),
           BlocProvider(create: (_) => ChatStore()),
-          BlocProvider(create: (_) => AdmobStore()),
         ],
-        child: const _AppRoot(),
+        child: _AdManagerProvider(
+          adManagerStore: _adManagerStore,
+          child: _AppRoot(adManagerStore: _adManagerStore),
+        ),
       ),
     );
   }
 }
 
+/// InheritedWidget to provide AdManagerStore to descendant widgets
+class _AdManagerProvider extends InheritedWidget {
+  final AdManagerStore adManagerStore;
+
+  const _AdManagerProvider({
+    required this.adManagerStore,
+    required super.child,
+  });
+
+  static AdManagerStore of(BuildContext context) {
+    final provider = context.dependOnInheritedWidgetOfExactType<_AdManagerProvider>();
+    assert(provider != null, 'No _AdManagerProvider found in context');
+    return provider!.adManagerStore;
+  }
+
+  @override
+  bool updateShouldNotify(_AdManagerProvider oldWidget) {
+    return adManagerStore != oldWidget.adManagerStore;
+  }
+}
+
+/// Helper function to get AdManagerStore from context
+AdManagerStore getAdManagerStore(BuildContext context) {
+  return _AdManagerProvider.of(context);
+}
+
 class _AppRoot extends StatefulWidget {
-  const _AppRoot();
+  final AdManagerStore adManagerStore;
+  
+  const _AppRoot({required this.adManagerStore});
 
   @override
   State<_AppRoot> createState() => _AppRootState();
 }
 
 class _AppRootState extends State<_AppRoot> {
+  AppLifecycleReactor? _appLifecycleReactor;
+
   @override
   void initState() {
     super.initState();
-    // Load remote AdMob config as early as possible.
-    // No auth token needed — the endpoint is public.
-    context.read<AdmobStore>().load();
+    _initializeAds();
+  }
+
+  Future<void> _initializeAds() async {
+    final admobStore = context.read<AdmobStore>();
+    await admobStore.load();
+    
+    // Initialize ad managers after config is loaded
+    await widget.adManagerStore.initialize();
+    
+    // Set up app lifecycle observer for app open ads
+    if (!kIsWeb && AdmobStore.isEnabled) {
+      _appLifecycleReactor = AppLifecycleReactor(
+        widget.adManagerStore.appOpenAdManager,
+      );
+      _appLifecycleReactor?.listenToAppStateChanges();
+    }
+  }
+
+  @override
+  void dispose() {
+    _appLifecycleReactor?.stopListening();
+    super.dispose();
   }
 
   @override

@@ -3,7 +3,6 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/network/api_client.dart';
-import '../../../../core/store/token_store.dart';
 import '../../../../core/store/user_store.dart';
 import '../../data/models/rsi_response_model.dart';
 import '../../data/services/signal_tool_service.dart';
@@ -60,8 +59,7 @@ class _RsiHeatmapSectionState extends State<RsiHeatmapSection> {
       _error = null;
     });
     try {
-      final items =
-          await _service.getRsiLatestAll(timeframe: widget.timeframe);
+      final items = await _service.getRsiLatestAll(timeframe: widget.timeframe);
       if (!mounted) return;
       setState(() {
         _items = items;
@@ -81,38 +79,33 @@ class _RsiHeatmapSectionState extends State<RsiHeatmapSection> {
     if (_isLoading) {
       return const SizedBox(
         height: 200,
-        child: Center(
-          child: CircularProgressIndicator(color: AppColors.blue),
-        ),
+        child: Center(child: CircularProgressIndicator(color: AppColors.blue)),
       );
     }
     if (_error != null) {
       return _ErrorRetry(message: _error!, onRetry: _loadData);
     }
 
-    // Map token images from store.
-    final storeItems = context.read<TokenStore>().state.items;
-    final tokenImages = {
-      for (final t in storeItems) t.coin: t.image ?? '',
-    };
-
-    final heatmapTokens = _items
-        .map((item) {
-          final val =
-              widget.heatmapRsiType == 'rsi14' ? item.rsi14 : item.rsi7;
-          if (val == null) return null;
-          final imageUrl = tokenImages[item.shortSymbol] ?? '';
-          return RsiTokenPoint(
-            symbol: item.shortSymbol,
-            imageUrl: imageUrl,
-            rsiValue: val,
-            xPosition: ((val - 1) / 98).clamp(0.05, 0.95),
-            color: _rsiColor(val),
-          );
-        })
-        .whereType<RsiTokenPoint>()
-        .toList()
-      ..sort((a, b) => a.rsiValue.compareTo(b.rsiValue));
+    final heatmapTokens =
+        _items
+            .map((item) {
+              final val = widget.heatmapRsiType == 'rsi14'
+                  ? item.rsi14
+                  : item.rsi7;
+              if (val == null) return null;
+              // Filter out items with empty symbol or image
+              if (item.shortSymbol.isEmpty || item.image.isEmpty) return null;
+              return RsiTokenPoint(
+                symbol: item.shortSymbol,
+                image: item.image,
+                rsiValue: val,
+                xPosition: ((val - 1) / 98).clamp(0.05, 0.95),
+                color: _rsiColor(val),
+              );
+            })
+            .whereType<RsiTokenPoint>()
+            .toList()
+          ..sort((a, b) => a.rsiValue.compareTo(b.rsiValue));
 
     if (heatmapTokens.isEmpty) return const SizedBox.shrink();
 
@@ -142,8 +135,10 @@ class _ErrorRetry extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(message,
-                style: const TextStyle(color: AppColors.white, fontSize: 13)),
+            Text(
+              message,
+              style: const TextStyle(color: AppColors.white, fontSize: 13),
+            ),
             const SizedBox(height: 10),
             TextButton(onPressed: onRetry, child: const Text('Retry')),
           ],

@@ -5,6 +5,7 @@ class RsiLatestItem {
   final int openTime;
   final double? rsi7;
   final double? rsi14;
+  final String image;
 
   const RsiLatestItem({
     required this.symbol,
@@ -12,15 +13,18 @@ class RsiLatestItem {
     required this.openTime,
     this.rsi7,
     this.rsi14,
+    required this.image,
+
   });
 
   factory RsiLatestItem.fromJson(Map<String, dynamic> json) {
     return RsiLatestItem(
-      symbol: (json['symbol'] ?? '').toString(),
-      timeframe: (json['timeframe'] ?? '').toString(),
+      symbol: json['symbol']?.toString() ?? '',
+      timeframe: json['timeframe']?.toString() ?? '',
       openTime: (json['open_time'] as num?)?.toInt() ?? 0,
       rsi7: (json['rsi7'] as num?)?.toDouble(),
       rsi14: (json['rsi14'] as num?)?.toDouble(),
+      image: json['image']?.toString() ?? '',
     );
   }
 

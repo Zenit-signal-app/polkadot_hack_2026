@@ -7,6 +7,7 @@ class StatsSectionWidget extends StatelessWidget {
   final double? high;
   final double? low;
   final double? volume;
+  final double? quoteVolume;
 
   const StatsSectionWidget({
     super.key,
@@ -14,6 +15,7 @@ class StatsSectionWidget extends StatelessWidget {
     this.high,
     this.low,
     this.volume,
+    this.quoteVolume,
   });
   
   String _formatPrice(double? price) {
@@ -39,14 +41,36 @@ class StatsSectionWidget extends StatelessWidget {
       return NumberFormat('#,##0.00').format(vol);
     }
   }
+  
+  /// Parse symbol to extract baseAsset and quoteAsset
+  Map<String, String> _parseSymbol(String symbol) {
+    // Common quote assets
+    const quoteAssets = ['USDT', 'BUSD', 'USDC', 'BTC', 'ETH', 'BNB', 'USD'];
+    
+    for (final quote in quoteAssets) {
+      if (symbol.endsWith(quote)) {
+        final base = symbol.substring(0, symbol.length - quote.length);
+        if (base.isNotEmpty) {
+          return {'base': base, 'quote': quote};
+        }
+      }
+    }
+    
+    // Fallback if no match
+    return {'base': symbol, 'quote': ''};
+  }
 
   @override
   Widget build(BuildContext context) {
+    final symbolParts = _parseSymbol(token.symbol);
+    final baseAsset = symbolParts['base'] ?? '';
+    final quoteAsset = symbolParts['quote'] ?? '';
+    
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Column(
         children: [
-          // Current Price Row
+          // Row 1: Current Price | High
           Row(
             children: [
               Expanded(
@@ -58,7 +82,27 @@ class StatsSectionWidget extends StatelessWidget {
               const SizedBox(width: 16),
               Expanded(
                 child: _buildStatItem(
-                  'Volume',
+                  'High',
+                  _formatPrice(high),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          
+          // Row 2: Low | Volume (BaseAsset)
+          Row(
+            children: [
+              Expanded(
+                child: _buildStatItem(
+                  'Low',
+                  _formatPrice(low),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _buildStatItem(
+                  baseAsset.isNotEmpty ? 'Volume ($baseAsset)' : 'Volume (BaseAsset)',
                   _formatVolume(volume),
                 ),
               ),
@@ -66,22 +110,17 @@ class StatsSectionWidget extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           
-          // High/Low Row
+          // Row 3: Volume (QuoteAsset)
           Row(
             children: [
               Expanded(
                 child: _buildStatItem(
-                  'High',
-                  _formatPrice(high),
+                  quoteAsset.isNotEmpty ? 'Volume ($quoteAsset)' : 'Volume (QuoteAsset)',
+                  _formatVolume(quoteVolume),
                 ),
               ),
               const SizedBox(width: 16),
-              Expanded(
-                child: _buildStatItem(
-                  'Low',
-                  _formatPrice(low),
-                ),
-              ),
+              const Expanded(child: SizedBox()),
             ],
           ),
         ],

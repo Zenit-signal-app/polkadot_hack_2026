@@ -9,6 +9,7 @@ import '../../../../core/ads/admob_store.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/store/favorite_store.dart';
+import '../../../../routes/app_routes.dart';
 import '../../../../core/store/token_store.dart';
 import '../../../../core/store/user_store.dart';
 import '../../../../shared/widgets/layout/header_bar.dart';
@@ -59,14 +60,14 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!Platform.isAndroid && !Platform.isIOS) return;
 
     final adUnitId = context.read<AdmobStore>().resolveUnitId(
-          adType: 'banner',
-          debugFallback: Platform.isIOS
-              ? AdMobConfig.testBannerIos
-              : AdMobConfig.testBannerAndroid,
-          releaseFallback: Platform.isIOS
-              ? AdMobConfig.bannerAdUnitIdIos
-              : AdMobConfig.bannerAdUnitIdAndroid,
-        );
+      adType: 'banner',
+      debugFallback: Platform.isIOS
+          ? AdMobConfig.testBannerIos
+          : AdMobConfig.testBannerAndroid,
+      releaseFallback: Platform.isIOS
+          ? AdMobConfig.bannerAdUnitIdIos
+          : AdMobConfig.bannerAdUnitIdAndroid,
+    );
 
     _bannerAd?.dispose();
 
@@ -115,24 +116,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
   final List<Map<String, String>> _cards = const [
     {
-      'title': 'Discover heatmap',
-      'subtitle': 'Trade smarter, not harder.',
-      'buttonText': 'Explore now',
-    },
-    {
       'title': 'Market Analysis',
       'subtitle': 'Real-time insights for better decisions.',
       'buttonText': 'View insights',
+      'onTap': 'navigate_to_market_analysis',
     },
     {
       'title': 'Signal Alerts',
       'subtitle': 'Stay updated with latest signals.',
       'buttonText': 'Get alerts',
-    },
-    {
-      'title': 'Portfolio Tracker',
-      'subtitle': 'Monitor your trades and performance.',
-      'buttonText': 'Track now',
+      'onTap': 'navigate_to_signal_alerts',
     },
   ];
 
@@ -166,7 +159,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     width: MediaQuery.of(context).size.width,
                     decoration: const BoxDecoration(
                       image: DecorationImage(
-                        image: AssetImage('assets/images/background-banner.png'),
+                        image: AssetImage(
+                          'assets/images/background-banner.png',
+                        ),
                         fit: BoxFit.cover,
                       ),
                     ),
@@ -189,11 +184,15 @@ class _HomeScreenState extends State<HomeScreen> {
                               itemBuilder: (context, index) {
                                 final isActive = _currentPage == index;
                                 return Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                  ),
                                   child: Container(
                                     decoration: isActive
                                         ? BoxDecoration(
-                                            borderRadius: BorderRadius.circular(16),
+                                            borderRadius: BorderRadius.circular(
+                                              16,
+                                            ),
                                             gradient: const LinearGradient(
                                               begin: Alignment.topLeft,
                                               end: Alignment.bottomRight,
@@ -206,21 +205,31 @@ class _HomeScreenState extends State<HomeScreen> {
                                             ),
                                           )
                                         : null,
-                                    padding: isActive ? const EdgeInsets.all(1) : null,
+                                    padding: isActive
+                                        ? const EdgeInsets.all(1)
+                                        : null,
                                     child: Container(
                                       padding: const EdgeInsets.all(20),
                                       decoration: BoxDecoration(
-                                        color: const Color(0xFF0C1426).withOpacity(0.5),
-                                        borderRadius: BorderRadius.circular(isActive ? 15 : 16),
+                                        color: const Color(
+                                          0xFF0C1426,
+                                        ).withOpacity(0.5),
+                                        borderRadius: BorderRadius.circular(
+                                          isActive ? 15 : 16,
+                                        ),
                                         border: isActive
                                             ? null
                                             : Border.all(
-                                                color: const Color(0xFF0C1426).withOpacity(0.5),
+                                                color: const Color(
+                                                  0xFF0C1426,
+                                                ).withOpacity(0.5),
                                                 width: 1,
                                               ),
                                         boxShadow: [
                                           BoxShadow(
-                                            color: Colors.black.withOpacity(0.3),
+                                            color: Colors.black.withOpacity(
+                                              0.3,
+                                            ),
                                             blurRadius: 20,
                                             offset: const Offset(0, 8),
                                           ),
@@ -230,8 +239,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                         children: [
                                           Expanded(
                                             child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              mainAxisAlignment: MainAxisAlignment.center,
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.center,
                                               children: [
                                                 Text(
                                                   _cards[index]['title']!,
@@ -240,7 +251,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                                       .headlineSmall
                                                       ?.copyWith(
                                                         color: AppColors.white,
-                                                        fontWeight: FontWeight.w600,
+                                                        fontWeight:
+                                                            FontWeight.w600,
                                                         fontSize: 18,
                                                         letterSpacing: 0,
                                                       ),
@@ -251,19 +263,65 @@ class _HomeScreenState extends State<HomeScreen> {
                                                   style: Theme.of(context)
                                                       .textTheme
                                                       .bodyMedium
-                                                      ?.copyWith(color: AppColors.gray),
+                                                      ?.copyWith(
+                                                        color: AppColors.gray,
+                                                      ),
                                                 ),
                                                 const SizedBox(height: 16),
-                                                Text(
-                                                  _cards[index]['buttonText']!,
-                                                  style: Theme.of(context)
-                                                      .textTheme
-                                                      .bodyMedium
-                                                      ?.copyWith(
-                                                        color: const Color(0xFF5BA3FF),
-                                                        fontWeight: FontWeight.w600,
-                                                        fontSize: 14,
+                                                Container(
+                                                  decoration: BoxDecoration(
+                                                    color: const Color(
+                                                      0xFF5BA3FF,
+                                                    ),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          8,
+                                                        ),
+                                                  ),
+                                                  child: GestureDetector(
+                                                    onTap: () {
+                                                      final onTapAction =
+                                                          _cards[index]['onTap'];
+                                                      if (onTapAction != null) {
+                                                        // Implement navigation logic here based on onTapAction value
+                                                        // For example:
+                                                      if (onTapAction ==
+                                                            'navigate_to_market_analysis') {
+                                                          Navigator.pushNamed(
+                                                            context,
+                                                            AppRoutes.analysis,
+                                                          );
+                                                        } else if (onTapAction ==
+                                                            'navigate_to_signal_alerts') {
+                                                          Navigator.pushNamed(
+                                                            context,
+                                                            AppRoutes.notifications,
+                                                          );
+                                                        }
+                                                      }
+                                                    },
+                                                    child: Padding(
+                                                      padding:
+                                                          const EdgeInsets.symmetric(
+                                                            horizontal: 12,
+                                                            vertical: 8,
+                                                          ),
+                                                      child: Text(
+                                                        _cards[index]['buttonText']!,
+                                                        style: Theme.of(context)
+                                                            .textTheme
+                                                            .bodyMedium
+                                                            ?.copyWith(
+                                                              color: AppColors
+                                                                  .white,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w600,
+                                                              fontSize: 14,
+                                                            ),
                                                       ),
+                                                    ),
+                                                  ),
                                                 ),
                                               ],
                                             ),
@@ -289,7 +347,9 @@ class _HomeScreenState extends State<HomeScreen> {
                             children: List.generate(
                               _cards.length,
                               (index) => Container(
-                                margin: const EdgeInsets.symmetric(horizontal: 4),
+                                margin: const EdgeInsets.symmetric(
+                                  horizontal: 4,
+                                ),
                                 width: 6,
                                 height: 6,
                                 decoration: BoxDecoration(
@@ -300,7 +360,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                   boxShadow: _currentPage == index
                                       ? [
                                           BoxShadow(
-                                            color: const Color(0xFF5BA3FF).withOpacity(0.6),
+                                            color: const Color(
+                                              0xFF5BA3FF,
+                                            ).withOpacity(0.6),
                                             blurRadius: 8,
                                             spreadRadius: 1,
                                           ),
@@ -319,8 +381,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   Builder(
                     builder: (context) {
                       final bannerHeight =
-                          (MediaQuery.of(context).size.height * 0.06)
-                              .clamp(44.0, 72.0);
+                          (MediaQuery.of(context).size.height * 0.06).clamp(
+                            44.0,
+                            72.0,
+                          );
 
                       return Padding(
                         padding: const EdgeInsets.symmetric(
@@ -338,7 +402,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                       color: const Color(0xFF151F3A),
                                       borderRadius: BorderRadius.circular(8),
                                       border: Border.all(
-                                        color: AppColors.white.withOpacity(0.08),
+                                        color: AppColors.white.withOpacity(
+                                          0.08,
+                                        ),
                                       ),
                                     ),
                                     child: Center(
@@ -347,7 +413,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                             ? 'Banner ad failed to load'
                                             : 'Loading banner ad...',
                                         style: TextStyle(
-                                          color: AppColors.white.withOpacity(0.6),
+                                          color: AppColors.white.withOpacity(
+                                            0.6,
+                                          ),
                                           fontSize: 11,
                                         ),
                                       ),
@@ -359,7 +427,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     },
                   ),
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16.0,
+                      vertical: 10.0,
+                    ),
                     child: Row(
                       children: [
                         _buildTab('Popular', 0),
@@ -397,7 +468,10 @@ class _HomeScreenState extends State<HomeScreen> {
         });
 
         if (index == 1) {
-          await _loadFavorites();
+          final isLoggedIn = context.read<UserStore>().state.isLoggedIn;
+          if (isLoggedIn) {
+            await _loadFavorites();
+          }
         }
       },
       child: Container(
@@ -441,9 +515,9 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _favoriteSymbols = <String>{};
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to load favorites')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Failed to load favorites')));
     } finally {
       if (!mounted) return;
       setState(() {

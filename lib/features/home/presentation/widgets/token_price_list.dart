@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:hugeicons/hugeicons.dart';
 
+import '../../../../core/constants/app_colors.dart';
+import '../../../../core/store/user_store.dart';
 import '../../../../routes/app_routes.dart';
 import '../../data/models/token_model.dart';
 import '../bloc/price_bloc.dart';
@@ -24,6 +27,9 @@ class TokenPriceList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final userState = context.watch<UserStore>().state;
+    final isLoggedIn = userState.isLoggedIn;
+
     return BlocSelector<PriceBloc, PriceState, _ListMeta>(
       bloc: priceBloc,
       selector: (state) => _ListMeta.from(
@@ -55,6 +61,11 @@ class TokenPriceList extends StatelessWidget {
             padding: EdgeInsets.all(24),
             child: CircularProgressIndicator(),
           );
+        }
+
+        // Show login prompt if not logged in and on Favorite tab
+        if (selectedTabIndex == 1 && !isLoggedIn) {
+          return _buildLoginPrompt(context);
         }
 
         if (meta.symbols.isEmpty) {
@@ -93,6 +104,82 @@ class TokenPriceList extends StatelessWidget {
           },
         );
       },
+    );
+  }
+
+  Widget _buildLoginPrompt(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(32),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 80,
+              height: 80,
+              decoration: BoxDecoration(
+                color: AppColors.blue.withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                HugeIcons.strokeRoundedFavourite,
+                color: AppColors.blue,
+                size: 40,
+              ),
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              'Login to View Favorites',
+              style: TextStyle(
+                color: AppColors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Sign in to save and access your favorite tokens',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: AppColors.gray.withOpacity(0.8),
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 32),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pushNamed(AppRoutes.login);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.blue,
+                foregroundColor: AppColors.white,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 40,
+                  vertical: 14,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 0,
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(HugeIcons.strokeRoundedLogin03, size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    'Login',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

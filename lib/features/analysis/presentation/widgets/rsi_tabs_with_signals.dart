@@ -2,20 +2,24 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/network/api_client.dart';
+import '../../data/models/adx_response_model.dart';
+import '../../data/models/psar_response_model.dart';
 import '../../data/models/rsi_response_model.dart';
 import '../../data/services/signal_tool_service.dart';
 
 /// Main widget containing tabs and signal list
-/// Fetches RSI data internally based on symbol and timeframe
+/// Supports RSI, ADX, and PSAR indicators based on code
 class RsiTabsWithSignals extends StatefulWidget {
   final String symbol;
   final String timeframe;
   final String? tokenImageUrl;
+  final String code; // 'rsi', 'adx', 'psar'
 
   const RsiTabsWithSignals({
     super.key,
     required this.symbol,
     required this.timeframe,
+    required this.code,
     this.tokenImageUrl,
   });
 
@@ -24,9 +28,14 @@ class RsiTabsWithSignals extends StatefulWidget {
 }
 
 class _RsiTabsWithSignalsState extends State<RsiTabsWithSignals> {
-  String _selectedTab = 'oversold';
+  String _selectedTab = 'tab1';
   late SignalToolService _service;
+  
+  // Responses for different indicators
   RsiResponse? _rsiResponse;
+  AdxResponse? _adxResponse;
+  PsarResponse? _psarResponse;
+  
   bool _isLoading = true;
 
   @override
@@ -34,67 +43,166 @@ class _RsiTabsWithSignalsState extends State<RsiTabsWithSignals> {
     super.initState();
     final apiClient = ApiClient();
     _service = SignalToolService(apiClient: apiClient);
-    _loadRsiData();
+    _loadData();
   }
 
   @override
   void didUpdateWidget(covariant RsiTabsWithSignals oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.symbol != widget.symbol ||
-        oldWidget.timeframe != widget.timeframe) {
-      _loadRsiData();
+        oldWidget.timeframe != widget.timeframe ||
+        oldWidget.code != widget.code) {
+      _loadData();
     }
   }
 
-  Future<void> _loadRsiData() async {
+  Future<void> _loadData() async {
     if (!mounted) return;
     setState(() => _isLoading = true);
+    
     try {
-      final response = await _service.getRsiData(
-        symbol: widget.symbol,
-        timeframe: widget.timeframe,
-      );
-      if (!mounted) return;
-      setState(() {
-        _rsiResponse = response;
-        _isLoading = false;
-      });
+      switch (widget.code.toLowerCase()) {
+        case 'rsi':
+          final response = await _service.getRsiData(
+            symbol: widget.symbol,
+            timeframe: widget.timeframe,
+          );
+          if (!mounted) return;
+          setState(() {
+            _rsiResponse = response;
+            _isLoading = false;
+          });
+          break;
+          
+        case 'adx':
+          final response = await _service.getAdxData(
+            symbol: widget.symbol,
+            timeframe: widget.timeframe,
+          );
+          if (!mounted) return;
+          setState(() {
+            _adxResponse = response;
+            _isLoading = false;
+          });
+          break;
+          
+        case 'psar':
+          final response = await _service.getPsarData(
+            symbol: widget.symbol,
+            timeframe: widget.timeframe,
+          );
+          if (!mounted) return;
+          setState(() {
+            _psarResponse = response;
+            _isLoading = false;
+          });
+          break;
+          
+        default:
+          if (!mounted) return;
+          setState(() => _isLoading = false);
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() => _isLoading = false);
     }
   }
 
-  List<Map<String, dynamic>> _buildSignals(bool oversold) {
-    final rsi = _rsiResponse;
-    if (rsi == null) return [];
+  (String, String) _getTabLabels() {
+    final code = widget.code.toLowerCase();
+    if (code == 'adx' || code == 'psar') {
+      return ('Uptrend', 'Downtrend');
+    }
+    return ('Over sold', 'Over Bought');
+  }
 
+  List<Map<String, dynamic>> _buildSignals() {
     final symbolDisplay = widget.symbol.endsWith('USDT')
         ? widget.symbol.substring(0, widget.symbol.length - 4)
         : widget.symbol;
 
+    switch (widget.code.toLowerCase()) {
+      case 'rsi':
+        return _buildRsiSignals(symbolDisplay);
+      case 'adx':
+        return _buildAdxSignals(symbolDisplay);
+      case 'psar':
+        return _buildPsarSignals(symbolDisplay);
+      default:
+        return [];
+    }
+  }
+
+  List<Map<String, dynamic>> _buildRsiSignals(String symbolDisplay) {
+    final rsi = _rsiResponse;
+    if (rsi == null) return [];
+
+    final isOversold = _selectedTab == 'tab1';
     return rsi.data
-        .where(
-          (r) => r.rsi14 != null && (oversold ? r.rsi14! < 30 : r.rsi14! > 70),
-        )
+        .where((r) => r.rsi14 != null && (isOversold ? r.rsi14! < 30 : r.rsi14! > 70))
         .map((r) {
           final dt = r.dateTime;
           return {
             'pair': '$symbolDisplay/USDT',
-            'rsi': r.rsi14!.toStringAsFixed(1),
-            'date':
-                '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}',
-            'time':
-                '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}',
+            'value': r.rsi14!.toStringAsFixed(1),
+            'label': 'RSI',
+            'date': '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}',
+            'time': '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}',
+          };
+        })
+        .toList();
+  }
+
+  List<Map<String, dynamic>> _buildAdxSignals(String symbolDisplay) {
+    final adx = _adxResponse;
+    if (adx == null || adx.data.isEmpty) return [];
+
+    final trendFilter = _selectedTab == 'tab1' ? 'uptrend' : 'downtrend';
+    return adx.data
+        .where((r) => r.trend != null && 
+                     r.trend!.isNotEmpty && 
+                     r.trend!.toLowerCase() == trendFilter)
+        .map((r) {
+          final dt = r.dateTime;
+          return {
+            'pair': '$symbolDisplay/USDT',
+            'value': r.adx?.toStringAsFixed(1) ?? '--',
+            'label': 'ADX',
+            'date': '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}',
+            'time': '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}',
+          };
+        })
+        .toList();
+  }
+
+  List<Map<String, dynamic>> _buildPsarSignals(String symbolDisplay) {
+    final psar = _psarResponse;
+    if (psar == null || psar.data.isEmpty) return [];
+
+    final trendFilter = _selectedTab == 'tab1' ? 'uptrend' : 'downtrend';
+    return psar.data
+        .where((r) => r.trend != null && 
+                     r.trend!.isNotEmpty && 
+                     r.trend!.toLowerCase() == trendFilter)
+        .map((r) {
+          final dt = r.dateTime;
+          return {
+            'pair': '$symbolDisplay/USDT',
+            'value': r.psar?.toStringAsFixed(2) ?? '--',
+            'label': 'PSAR',
+            'date': '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}',
+            'time': '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}',
           };
         })
         .toList();
   }
 
   void _handleTabChange(String tab) {
-    setState(() {
-      _selectedTab = tab;
-    });
+    if (_selectedTab != tab) {
+      setState(() {
+        _selectedTab = tab;
+      });
+    }
   }
 
   @override
@@ -112,8 +220,8 @@ class _RsiTabsWithSignalsState extends State<RsiTabsWithSignals> {
       );
     }
 
-    final oversoldSignals = _buildSignals(true);
-    final overboughtSignals = _buildSignals(false);
+    final signals = _buildSignals();
+    final (leftLabel, rightLabel) = _getTabLabels();
 
     return Container(
       decoration: BoxDecoration(
@@ -122,18 +230,16 @@ class _RsiTabsWithSignalsState extends State<RsiTabsWithSignals> {
       ),
       child: Column(
         children: [
-          // Tabs - pass state and callback down
           _TabSelector(
             selectedTab: _selectedTab,
+            leftLabel: leftLabel,
+            rightLabel: rightLabel,
             onTabChanged: _handleTabChange,
           ),
-          // Signal list - receives selected tab to filter/display content
           _SignalList(
-            signals: _selectedTab == 'oversold'
-                ? oversoldSignals
-                : overboughtSignals,
+            signals: signals,
             tokenImageUrl: widget.tokenImageUrl ?? '',
-            isOversold: _selectedTab == 'oversold',
+            isFirstTab: _selectedTab == 'tab1',
           ),
         ],
       ),
@@ -144,9 +250,16 @@ class _RsiTabsWithSignalsState extends State<RsiTabsWithSignals> {
 /// Tab selector - now stateless, receives state from parent
 class _TabSelector extends StatelessWidget {
   final String selectedTab;
+  final String leftLabel;
+  final String rightLabel;
   final ValueChanged<String> onTabChanged;
 
-  const _TabSelector({required this.selectedTab, required this.onTabChanged});
+  const _TabSelector({
+    required this.selectedTab,
+    required this.leftLabel,
+    required this.rightLabel,
+    required this.onTabChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -155,11 +268,11 @@ class _TabSelector extends StatelessWidget {
         children: [
           Expanded(
             child: _TabButton(
-              label: 'Over sold',
-              isSelected: selectedTab == 'oversold',
+              label: leftLabel,
+              isSelected: selectedTab == 'tab1',
               onTap: () {
-                if (selectedTab != 'oversold') {
-                  onTabChanged('oversold');
+                if (selectedTab != 'tab1') {
+                  onTabChanged('tab1');
                 }
               },
               isLeft: true,
@@ -167,11 +280,11 @@ class _TabSelector extends StatelessWidget {
           ),
           Expanded(
             child: _TabButton(
-              label: 'Over Bought',
-              isSelected: selectedTab == 'overbought',
+              label: rightLabel,
+              isSelected: selectedTab == 'tab2',
               onTap: () {
-                if (selectedTab != 'overbought') {
-                  onTabChanged('overbought');
+                if (selectedTab != 'tab2') {
+                  onTabChanged('tab2');
                 }
               },
               isLeft: false,
@@ -251,12 +364,12 @@ class _TabButton extends StatelessWidget {
 class _SignalList extends StatelessWidget {
   final List<Map<String, dynamic>> signals;
   final String tokenImageUrl;
-  final bool isOversold;
+  final bool isFirstTab;
 
   const _SignalList({
     required this.signals,
     required this.tokenImageUrl,
-    required this.isOversold,
+    required this.isFirstTab,
   });
 
   @override
@@ -282,7 +395,7 @@ class _SignalList extends StatelessWidget {
           signal: signals[index],
           tokenImageUrl: tokenImageUrl,
           isLast: index == signals.length - 1,
-          isOversold: isOversold,
+          isFirstTab: isFirstTab,
         ),
       ),
     );
@@ -294,20 +407,22 @@ class _SignalItem extends StatelessWidget {
   final Map<String, dynamic> signal;
   final String tokenImageUrl;
   final bool isLast;
-  final bool isOversold;
+  final bool isFirstTab;
 
   const _SignalItem({
     required this.signal,
     required this.tokenImageUrl,
     required this.isLast,
-    required this.isOversold,
+    required this.isFirstTab,
   });
 
   @override
   Widget build(BuildContext context) {
-    final rsiColor = isOversold
-        ? const Color(0xFF22C55E) // green — oversold
-        : const Color(0xFFEF4444); // red — overbought
+    // First tab is green (oversold/uptrend), second tab is red (overbought/downtrend)
+    final valueColor = isFirstTab
+        ? const Color(0xFF22C55E) // green
+        : const Color(0xFFEF4444); // red
+        
     return Column(
       children: [
         Padding(
@@ -334,11 +449,11 @@ class _SignalItem extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'RSI: ${signal['rsi']}',
+                      '${signal['label']}: ${signal['value']}',
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
-                        color: rsiColor,
+                        color: valueColor,
                       ),
                     ),
                   ],

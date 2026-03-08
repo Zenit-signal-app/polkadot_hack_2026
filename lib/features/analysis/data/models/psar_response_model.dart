@@ -5,6 +5,7 @@ class PsarRecord {
   final double? ep;
   final double? af;
   final int? psarTurn; // 1 if reversal, 0 otherwise
+  final String? trend;
 
   const PsarRecord({
     required this.openTime,
@@ -13,6 +14,7 @@ class PsarRecord {
     this.ep,
     this.af,
     this.psarTurn,
+    this.trend,
   });
 
   factory PsarRecord.fromJson(Map<String, dynamic> json) {
@@ -23,6 +25,7 @@ class PsarRecord {
       ep: (json['ep'] as num?)?.toDouble(),
       af: (json['af'] as num?)?.toDouble(),
       psarTurn: (json['psar_turn'] as num?)?.toInt(),
+      trend: json['trend']?.toString(),
     );
   }
 

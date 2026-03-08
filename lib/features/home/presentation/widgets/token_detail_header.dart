@@ -34,35 +34,22 @@ class TokenDetailHeader extends StatelessWidget {
           const SizedBox(width: 12),
           
           // Token Icon
-          Container(
+          SizedBox(
             width: 32,
             height: 32,
-            decoration: BoxDecoration(
-              color: const Color(0xFFFF9800),
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFFFF9800).withOpacity(0.3),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Center(
-              child: imageUrl != null && imageUrl!.isNotEmpty
-                  ? ClipOval(
-                      child: Image.network(
-                        imageUrl!,
-                        width: 22,
-                        height: 22,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          return _buildDefaultIcon();
-                        },
-                      ),
-                    )
-                  : _buildDefaultIcon(),
-            ),
+            child: imageUrl != null && imageUrl!.isNotEmpty
+                ? ClipOval(
+                    child: Image.network(
+                      imageUrl!,
+                      width: 32,
+                      height: 32,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) {
+                        return _buildDefaultIcon();
+                      },
+                    ),
+                  )
+                : _buildDefaultIcon(),
           ),
           const SizedBox(width: 12),
           
@@ -95,12 +82,22 @@ class TokenDetailHeader extends StatelessWidget {
   }
 
   Widget _buildDefaultIcon() {
-    return Text(
-      symbol.isNotEmpty ? symbol[0].toUpperCase() : '₿',
-      style: const TextStyle(
-        fontSize: 16,
-        fontWeight: FontWeight.bold,
-        color: Colors.white,
+    return Container(
+      width: 32,
+      height: 32,
+      decoration: const BoxDecoration(
+        color: Color(0xFFFF9800),
+        shape: BoxShape.circle,
+      ),
+      child: Center(
+        child: Text(
+          symbol.isNotEmpty ? symbol[0].toUpperCase() : '₿',
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
       ),
     );
   }

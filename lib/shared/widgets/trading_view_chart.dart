@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -164,7 +166,20 @@ class _TradingViewChartState extends State<TradingViewChart>
       height: widget.height,
       child: Stack(
         children: [
-          WebViewWidget(controller: _controller),
+          WebViewWidget(
+            controller: _controller,
+            gestureRecognizers: {
+              Factory<VerticalDragGestureRecognizer>(
+                () => VerticalDragGestureRecognizer(),
+              ),
+              Factory<HorizontalDragGestureRecognizer>(
+                () => HorizontalDragGestureRecognizer(),
+              ),
+              Factory<ScaleGestureRecognizer>(
+                () => ScaleGestureRecognizer(),
+              ),
+            },
+          ),
 
           // Shimmer overlay fades out once the chart is loaded.
           AnimatedSwitcher(
