@@ -44,7 +44,6 @@ enum TradingViewIndicator {
   final String id;
 }
 
-
 class TradingViewChart extends StatefulWidget {
   /// TradingView symbol identifier, e.g. `"BINANCE:BTCUSDT"`.
   final String symbol;
@@ -121,7 +120,6 @@ class _TradingViewChartState extends State<TradingViewChart>
           onWebResourceError: (_) {
             if (mounted) setState(() => _isLoading = false);
           },
-
         ),
       );
   }
@@ -129,9 +127,7 @@ class _TradingViewChartState extends State<TradingViewChart>
   // ── URL builder ───────────────────────────────────────────────────────────
 
   Uri _buildChartUri() {
-    final params = <String, String>{
-      'symbol': widget.symbol,
-    };
+    final params = <String, String>{'symbol': widget.symbol};
     if (widget.indicators.isNotEmpty) {
       params['indicators'] = widget.indicators.map((i) => i.id).join(',');
     }
@@ -175,9 +171,7 @@ class _TradingViewChartState extends State<TradingViewChart>
               Factory<HorizontalDragGestureRecognizer>(
                 () => HorizontalDragGestureRecognizer(),
               ),
-              Factory<ScaleGestureRecognizer>(
-                () => ScaleGestureRecognizer(),
-              ),
+              Factory<ScaleGestureRecognizer>(() => ScaleGestureRecognizer()),
             },
           ),
 

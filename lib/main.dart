@@ -12,6 +12,7 @@ import 'core/store/user_store.dart';
 import 'core/store/token_store.dart';
 import 'core/store/favorite_store.dart';
 import 'core/store/chat_store.dart';
+import 'core/store/chain_store.dart';
 import 'core/ads/admob_store.dart';
 import 'core/ads/ad_manager_store.dart';
 import 'core/ads/app_lifecycle_reactor.dart';
@@ -75,7 +76,7 @@ class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Seerbot Signal',
+      title: 'Zenit',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
@@ -101,6 +102,7 @@ class _MyAppState extends State<MyApp> {
           BlocProvider(create: (_) => TokenStore()),
           BlocProvider(create: (_) => FavoriteStore()),
           BlocProvider(create: (_) => ChatStore()),
+          BlocProvider(create: (_) => ChainStore()),
         ],
         child: _AdManagerProvider(
           adManagerStore: _adManagerStore,

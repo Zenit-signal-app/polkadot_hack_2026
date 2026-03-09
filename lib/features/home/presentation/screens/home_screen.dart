@@ -9,8 +9,8 @@ import '../../../../core/ads/admob_store.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/store/favorite_store.dart';
-import '../../../../routes/app_routes.dart';
 import '../../../../core/store/token_store.dart';
+import '../../../../core/store/chain_store.dart';
 import '../../../../core/store/user_store.dart';
 import '../../../../shared/widgets/layout/header_bar.dart';
 import '../../data/services/favorite_service.dart';
@@ -26,15 +26,45 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
+class _ChainInfo {
+  final String key;
+  final String name;
+  final String imageUrl;
+
+  const _ChainInfo({
+    required this.key,
+    required this.name,
+    required this.imageUrl,
+  });
+}
+
 class _HomeScreenState extends State<HomeScreen> {
-  final PageController _pageController = PageController();
+  static const _chains = [
+    _ChainInfo(
+      key: 'hedera',
+      name: 'Hedera',
+      imageUrl: 'assets/images/hedera.png',
+    ),
+    _ChainInfo(
+      key: 'polkadot',
+      name: 'Polkadot',
+      imageUrl: 'assets/images/polkadot.png',
+    ),
+    _ChainInfo(
+      key: 'solana',
+      name: 'Solana',
+      imageUrl: 'assets/images/solana.png',
+    ),
+  ];
+
   final ScrollController _scrollController = ScrollController();
-  int _currentPage = 0;
   int _selectedTabIndex = 0;
   late PriceBloc _priceBloc;
   late FavoriteService _favoriteService;
   BannerAd? _bannerAd;
+  // ignore: unused_field
   bool _isBannerLoaded = false;
+  // ignore: unused_field
   bool _isBannerFailed = false;
   bool _isFavoriteLoading = false;
   Set<String> _favoriteSymbols = <String>{};
@@ -114,24 +144,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  final List<Map<String, String>> _cards = const [
-    {
-      'title': 'Market Analysis',
-      'subtitle': 'Real-time insights for better decisions.',
-      'buttonText': 'View insights',
-      'onTap': 'navigate_to_market_analysis',
-    },
-    {
-      'title': 'Signal Alerts',
-      'subtitle': 'Stay updated with latest signals.',
-      'buttonText': 'Get alerts',
-      'onTap': 'navigate_to_signal_alerts',
-    },
-  ];
-
   @override
   void dispose() {
-    _pageController.dispose();
     _scrollController
       ..removeListener(_onScroll)
       ..dispose();
@@ -142,317 +156,268 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    return Stack(
       children: [
-        HeaderBar(
-          title: 'Zenit',
-          onMenuTap: () => Scaffold.of(context).openDrawer(),
-        ),
-        Expanded(
-          child: Container(
-            color: AppColors.dark,
-            child: SingleChildScrollView(
-              controller: _scrollController,
+        Container(
+      color: AppColors.dark,
+      child: SingleChildScrollView(
+        controller: _scrollController,
+        child: Column(
+          children: [
+            Container(
+              width: double.infinity,
+              decoration: const BoxDecoration(
+                image: DecorationImage(
+                  image: AssetImage('assets/images/background-banner.png'),
+                  fit: BoxFit.cover,
+                ),
+              ),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Container(
-                    width: MediaQuery.of(context).size.width,
-                    decoration: const BoxDecoration(
-                      image: DecorationImage(
-                        image: AssetImage(
-                          'assets/images/background-banner.png',
-                        ),
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Column(
+                  HeaderBar(
+                    title: 'Zenit',
+                    onMenuTap: () => Scaffold.of(context).openDrawer(),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                    child: IntrinsicHeight(
+                      child: Row(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          const SizedBox(height: 20),
-                          SizedBox(
-                            height: 180,
-                            child: PageView.builder(
-                              controller: _pageController,
-                              onPageChanged: (index) {
-                                setState(() {
-                                  _currentPage = index;
-                                });
-                              },
-                              itemCount: _cards.length,
-                              itemBuilder: (context, index) {
-                                final isActive = _currentPage == index;
-                                return Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 4,
-                                  ),
-                                  child: Container(
-                                    decoration: isActive
-                                        ? BoxDecoration(
-                                            borderRadius: BorderRadius.circular(
-                                              16,
-                                            ),
-                                            gradient: const LinearGradient(
-                                              begin: Alignment.topLeft,
-                                              end: Alignment.bottomRight,
-                                              colors: [
-                                                Color(0xFF3D98E7),
-                                                Color(0xFF68B9FF),
-                                                Color(0xFF0D4C83),
-                                              ],
-                                              stops: [0.0497, 0.5092, 0.8234],
-                                            ),
-                                          )
-                                        : null,
-                                    padding: isActive
-                                        ? const EdgeInsets.all(1)
-                                        : null,
-                                    child: Container(
-                                      padding: const EdgeInsets.all(20),
-                                      decoration: BoxDecoration(
-                                        color: const Color(
-                                          0xFF0C1426,
-                                        ).withOpacity(0.5),
-                                        borderRadius: BorderRadius.circular(
-                                          isActive ? 15 : 16,
-                                        ),
-                                        border: isActive
-                                            ? null
-                                            : Border.all(
-                                                color: const Color(
-                                                  0xFF0C1426,
-                                                ).withOpacity(0.5),
-                                                width: 1,
-                                              ),
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: Colors.black.withOpacity(
-                                              0.3,
-                                            ),
-                                            blurRadius: 20,
-                                            offset: const Offset(0, 8),
-                                          ),
-                                        ],
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              mainAxisAlignment:
-                                                  MainAxisAlignment.center,
-                                              children: [
-                                                Text(
-                                                  _cards[index]['title']!,
-                                                  style: Theme.of(context)
-                                                      .textTheme
-                                                      .headlineSmall
-                                                      ?.copyWith(
-                                                        color: AppColors.white,
-                                                        fontWeight:
-                                                            FontWeight.w600,
-                                                        fontSize: 18,
-                                                        letterSpacing: 0,
-                                                      ),
-                                                ),
-                                                const SizedBox(height: 8),
-                                                Text(
-                                                  _cards[index]['subtitle']!,
-                                                  style: Theme.of(context)
-                                                      .textTheme
-                                                      .bodyMedium
-                                                      ?.copyWith(
-                                                        color: AppColors.gray,
-                                                      ),
-                                                ),
-                                                const SizedBox(height: 16),
-                                                Container(
-                                                  decoration: BoxDecoration(
-                                                    color: const Color(
-                                                      0xFF5BA3FF,
-                                                    ),
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          8,
-                                                        ),
-                                                  ),
-                                                  child: GestureDetector(
-                                                    onTap: () {
-                                                      final onTapAction =
-                                                          _cards[index]['onTap'];
-                                                      if (onTapAction != null) {
-                                                        // Implement navigation logic here based on onTapAction value
-                                                        // For example:
-                                                      if (onTapAction ==
-                                                            'navigate_to_market_analysis') {
-                                                          Navigator.pushNamed(
-                                                            context,
-                                                            AppRoutes.analysis,
-                                                          );
-                                                        } else if (onTapAction ==
-                                                            'navigate_to_signal_alerts') {
-                                                          Navigator.pushNamed(
-                                                            context,
-                                                            AppRoutes.notifications,
-                                                          );
-                                                        }
-                                                      }
-                                                    },
-                                                    child: Padding(
-                                                      padding:
-                                                          const EdgeInsets.symmetric(
-                                                            horizontal: 12,
-                                                            vertical: 8,
-                                                          ),
-                                                      child: Text(
-                                                        _cards[index]['buttonText']!,
-                                                        style: Theme.of(context)
-                                                            .textTheme
-                                                            .bodyMedium
-                                                            ?.copyWith(
-                                                              color: AppColors
-                                                                  .white,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w600,
-                                                              fontSize: 14,
-                                                            ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                          const SizedBox(width: 16),
-                                          Image.asset(
-                                            'assets/images/image.png',
-                                            height: 67,
-                                            width: 75,
-                                            fit: BoxFit.contain,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: List.generate(
-                              _cards.length,
-                              (index) => Container(
-                                margin: const EdgeInsets.symmetric(
-                                  horizontal: 4,
-                                ),
-                                width: 6,
-                                height: 6,
-                                decoration: BoxDecoration(
-                                  color: _currentPage == index
-                                      ? const Color(0xFF5BA3FF)
-                                      : AppColors.white.withOpacity(0.3),
-                                  shape: BoxShape.circle,
-                                  boxShadow: _currentPage == index
-                                      ? [
-                                          BoxShadow(
-                                            color: const Color(
-                                              0xFF5BA3FF,
-                                            ).withOpacity(0.6),
-                                            blurRadius: 8,
-                                            spreadRadius: 1,
-                                          ),
-                                        ]
-                                      : null,
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 20),
+                          Expanded(child: _buildCexCard()),
+                          const SizedBox(width: 12),
+                          Expanded(child: _buildChainCard()),
                         ],
                       ),
                     ),
                   ),
-                  const SizedBox(height: 16),
-                  Builder(
-                    builder: (context) {
-                      final bannerHeight =
-                          (MediaQuery.of(context).size.height * 0.06).clamp(
-                            44.0,
-                            72.0,
-                          );
-
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 10,
-                        ),
-                        child: Center(
-                          child: SizedBox(
-                            height: bannerHeight,
-                            width: 320,
-                            child: _isBannerLoaded && _bannerAd != null
-                                ? AdWidget(ad: _bannerAd!)
-                                : Container(
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF151F3A),
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(
-                                        color: AppColors.white.withOpacity(
-                                          0.08,
-                                        ),
-                                      ),
-                                    ),
-                                    child: Center(
-                                      child: Text(
-                                        _isBannerFailed
-                                            ? 'Banner ad failed to load'
-                                            : 'Loading banner ad...',
-                                        style: TextStyle(
-                                          color: AppColors.white.withOpacity(
-                                            0.6,
-                                          ),
-                                          fontSize: 11,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16.0,
-                      vertical: 10.0,
-                    ),
-                    child: Row(
-                      children: [
-                        _buildTab('Popular', 0),
-                        const SizedBox(width: 0),
-                        _buildTab('Favorite', 1),
-                        const SizedBox(width: 0),
-                      ],
-                    ),
-                  ),
-                  TokenPriceList(
-                    priceBloc: _priceBloc,
-                    selectedTabIndex: _selectedTabIndex,
-                    favoriteSymbols: _favoriteSymbols,
-                    isFavoriteLoading: _isFavoriteLoading,
-                  ),
-                  const SizedBox(height: 20),
                 ],
               ),
             ),
-          ),
+            // TODO: AdMob banner hidden temporarily
+            // const SizedBox(height: 16),
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16.0,
+                vertical: 10.0,
+              ),
+              child: Row(
+                children: [
+                  _buildTab('Popular', 0),
+                  const SizedBox(width: 0),
+                  _buildTab('Favorite', 1),
+                  const SizedBox(width: 0),
+                ],
+              ),
+            ),
+            TokenPriceList(
+              priceBloc: _priceBloc,
+              selectedTabIndex: _selectedTabIndex,
+              favoriteSymbols: _favoriteSymbols,
+              isFavoriteLoading: _isFavoriteLoading,
+            ),
+            const SizedBox(height: 20),
+          ],
+        ),
+      ),
+        ),
+        BlocBuilder<ChainStore, ChainState>(
+          builder: (context, chainState) {
+            if (!chainState.isLoading) return const SizedBox.shrink();
+            return Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: Container(
+                color: const Color(0xFF0F1C2E).withOpacity(0.92),
+                padding: const EdgeInsets.symmetric(vertical: 20),
+                child: const Center(
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    color: Color(0xFF5BA3FF),
+                  ),
+                ),
+              ),
+            );
+          },
         ),
       ],
+    );
+  }
+
+  Widget _buildCexCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0C1426).withOpacity(0.7),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withOpacity(0.1)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Text(
+            'Centralized Exchange',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: AppColors.white.withOpacity(0.4),
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            height: 60,
+            decoration: BoxDecoration(
+              color: Colors.black,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.white.withOpacity(0.1)),
+            ),
+            child: Image.asset(
+              'assets/images/binance.png',
+              fit: BoxFit.contain,
+              filterQuality: FilterQuality.high,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChainCard() {
+    final chainState = context.watch<ChainStore>().state;
+    final selected = _chains.firstWhere(
+      (c) => c.key == chainState.selectedKey,
+      orElse: () => _chains.first,
+    );
+    return GestureDetector(
+      onTap: chainState.isLoading ? null : _showChainSelector,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0C1426).withOpacity(0.5),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFF5BA3FF), width: 1.5),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            const Text(
+              'Select Chain',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: AppColors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.black,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: const Color(0xFF5BA3FF).withOpacity(0.3),
+                ),
+              ),
+              child: Image.asset(
+                      selected.imageUrl,
+                      width: 40,
+                      height: 40,
+                      fit: BoxFit.contain,
+                      filterQuality: FilterQuality.high,
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showChainSelector() {
+    final chainStore = context.read<ChainStore>();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0F1C2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return BlocBuilder<ChainStore, ChainState>(
+          bloc: chainStore,
+          builder: (_, chainState) {
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 12),
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 20),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Select Chain',
+                      style: TextStyle(
+                        color: AppColors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                ..._chains.map((chain) {
+                  final isSelected = chainState.selectedKey == chain.key;
+                  return GestureDetector(
+                    onTap: () {
+                      chainStore.selectChain(chain.key);
+                      Navigator.of(ctx).pop();
+                    },
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 6,
+                      ),
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? const Color(0xFF5BA3FF).withOpacity(0.12)
+                            : const Color(0xFF1A2744),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: isSelected
+                              ? const Color(0xFF5BA3FF)
+                              : Colors.white.withOpacity(0.1),
+                          width: isSelected ? 2 : 1,
+                        ),
+                      ),
+                      child: Image.asset(
+                        chain.imageUrl,
+                        height: 40,
+                        fit: BoxFit.contain,
+                        filterQuality: FilterQuality.high,
+                      ),
+                    ),
+                  );
+                }),
+                const SizedBox(height: 32),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 

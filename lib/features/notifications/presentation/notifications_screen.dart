@@ -537,9 +537,10 @@ class _NotificationsScreenContentState
       padding: const EdgeInsets.symmetric(horizontal: 16),
       itemCount: state.notifications.length + 2, // +1 for banner, +1 for load more
       itemBuilder: (context, index) {
-        // Banner ad at the top
+        // Banner ad at the top — hidden temporarily
+        // TODO: AdMob banner hidden temporarily
         if (index == 0) {
-          return _buildBannerAdWidget();
+          return const SizedBox.shrink();
         }
         
         // Adjust index for notifications (offset by banner)
@@ -574,6 +575,8 @@ class _NotificationsScreenContentState
     );
   }
 
+  // TODO: AdMob banner hidden temporarily
+  // ignore: unused_element
   Widget _buildBannerAdWidget() {
     final bannerHeight = 60.0;
 

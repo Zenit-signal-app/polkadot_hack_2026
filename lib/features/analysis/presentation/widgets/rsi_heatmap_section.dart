@@ -99,13 +99,11 @@ class _RsiHeatmapSectionState extends State<RsiHeatmapSection> {
                 symbol: item.shortSymbol,
                 image: item.image,
                 rsiValue: val,
-                xPosition: ((val - 1) / 98).clamp(0.05, 0.95),
                 color: _rsiColor(val),
               );
             })
             .whereType<RsiTokenPoint>()
-            .toList()
-          ..sort((a, b) => a.rsiValue.compareTo(b.rsiValue));
+            .toList();
 
     if (heatmapTokens.isEmpty) return const SizedBox.shrink();
 

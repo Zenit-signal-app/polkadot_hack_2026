@@ -419,6 +419,40 @@ class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
     );
   }
 
+  /// Maps an indicator code to its corresponding TradingView overlay indicator.
+  static TradingViewIndicator? _indicatorFromCode(String code) {
+    switch (code.toLowerCase()) {
+      case 'psar':
+        return TradingViewIndicator.psar;
+      case 'adx':
+        return TradingViewIndicator.adx;
+      case 'rsi':
+      case 'rsi14':
+        return TradingViewIndicator.rsi14;
+      case 'rsi7':
+        return TradingViewIndicator.rsi7;
+      case 'macd':
+        return TradingViewIndicator.macd;
+      case 'bb':
+      case 'bollinger':
+        return TradingViewIndicator.bollingerBands;
+      case 'ema20':
+        return TradingViewIndicator.ema20;
+      case 'ema50':
+        return TradingViewIndicator.ema50;
+      case 'sma20':
+        return TradingViewIndicator.sma20;
+      case 'stoch':
+      case 'stochastic':
+        return TradingViewIndicator.stochastic;
+      case 'vol':
+      case 'volume':
+        return TradingViewIndicator.volume;
+      default:
+        return null;
+    }
+  }
+
   /// Renders the correct section components based on [indicator.uses].
   Widget _buildContent() {
     final uses = widget.indicator.uses
@@ -431,31 +465,39 @@ class _IndicatorDetailScreenState extends State<IndicatorDetailScreen> {
     final tradingViewIndicators = <TradingViewIndicator>[];
     final otherWidgets = <Widget>[];
 
+    // Always inject TradingView indicator based on the indicator's own code
+    // (handles cases where `uses` only contains 'candle_chart' or is empty)
+    final codeIndicator = _indicatorFromCode(widget.indicator.code);
+    if (codeIndicator == TradingViewIndicator.psar &&
+        !tradingViewIndicators.contains(TradingViewIndicator.psar)) {
+      tradingViewIndicators.add(TradingViewIndicator.psar);
+    }
+
     for (final use in uses) {
       switch (use) {
         case 'adx':
-          tradingViewIndicators.add(TradingViewIndicator.adx);
-          // Add ADX line chart section separately
-          otherWidgets.add(AdxChartSection(
-            symbol: _selectedToken.pair,
-            timeframe: _timeframe,
-          ));
+          otherWidgets.add(
+            AdxChartSection(symbol: _selectedToken.pair, timeframe: _timeframe),
+          );
           break;
         case 'psar':
-          tradingViewIndicators.add(TradingViewIndicator.psar);
+          if (!tradingViewIndicators.contains(TradingViewIndicator.psar)) {
+            tradingViewIndicators.add(TradingViewIndicator.psar);
+          }
           break;
         case 'rsi_heatmap':
         case 'heatmap':
-          otherWidgets.add(RsiHeatmapSection(
-            timeframe: _timeframe,
-            heatmapRsiType: _heatmapRsiType,
-          ));
+          otherWidgets.add(
+            RsiHeatmapSection(
+              timeframe: _timeframe,
+              heatmapRsiType: _heatmapRsiType,
+            ),
+          );
           break;
         case 'adx_line':
-          otherWidgets.add(AdxChartSection(
-            symbol: _selectedToken.pair,
-            timeframe: _timeframe,
-          ));
+          otherWidgets.add(
+            AdxChartSection(symbol: _selectedToken.pair, timeframe: _timeframe),
+          );
           break;
         case 'candle_chart':
           // Will be handled by TradingView chart with no indicators
