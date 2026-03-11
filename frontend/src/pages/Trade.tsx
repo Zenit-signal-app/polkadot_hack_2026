@@ -618,15 +618,29 @@ export default function Trade() {
 
   const chartOrderLines = useMemo(() => {
     if (!hasPosition) return undefined;
-    const lines: Array<{ name: string; price: number; color: string; lineWidth?: number }> = [];
-    const addLine = (name: string, price: number | null | undefined, color: string, lineWidth?: number) => {
+    const lines: Array<{
+      name: string;
+      price: number;
+      color: string;
+      lineWidth?: number;
+      lineStyle?: number;
+      labelAlign?: "top" | "bottom";
+    }> = [];
+    const addLine = (
+      name: string,
+      price: number | null | undefined,
+      color: string,
+      lineStyle: number,
+      labelAlign: "top" | "bottom" = "top",
+      lineWidth?: number,
+    ) => {
       if (price == null || Number.isNaN(price) || !Number.isFinite(price)) return;
-      lines.push({ name, price, color, lineWidth });
+      lines.push({ name, price, color, lineStyle, labelAlign, lineWidth });
     };
-    addLine("Entry Price", effectiveEntryPrice, "#ffffff", 2);
-    addLine("Liquidation", previewLiquidationPrice, "#ef4444", 2);
-    addLine("Take Profit", previewTakeProfitPrice, "#22c55e", 2);
-    addLine("Stop Loss", previewStopLossPrice, "#eab308", 2);
+    addLine("Entry Price", effectiveEntryPrice, "#ffffff", 0, "top", 2);
+    addLine("Liquidation", previewLiquidationPrice, "#ef4444", 1, "bottom", 2);
+    addLine("Take Profit", previewTakeProfitPrice, "#22c55e", 1, "top", 2);
+    addLine("Stop Loss", previewStopLossPrice, "#eab308", 1, "bottom", 2);
     return lines.length > 0 ? lines : undefined;
   }, [
     hasPosition,

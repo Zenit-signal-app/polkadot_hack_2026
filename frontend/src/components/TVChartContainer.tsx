@@ -40,7 +40,14 @@ export interface TVChartContainerProps {
   onIntervalChange?: (resolution: string) => void;
   onTimeScaleRightOffsetChange?: (rightOffset: number) => void;
   onVisibleLogicalRangeChange?: (range: { from: number; to: number } | null) => void;
-  tpoLevels?: Array<{ name: string; price: number; color: string; lineWidth?: number }>;
+  tpoLevels?: Array<{
+    name: string;
+    price: number;
+    color: string;
+    lineWidth?: number;
+    lineStyle?: number;
+    labelAlign?: "top" | "bottom";
+  }>;
 }
 
 export default function TVChartContainer({
@@ -285,10 +292,11 @@ export default function TVChartContainer({
             remove: createPriceLine({
               price: level.price,
               color: level.color,
-              lineStyle: 0,
+              lineStyle: level.lineStyle ?? 0,
               lineWidth: level.lineWidth ?? 2,
               axisLabelVisible: true,
               title: level.name,
+              titleFontSize: 10,
               titleColor: level.color,
               titleBackgroundColor: "#121421",
             })?.remove,
@@ -322,11 +330,13 @@ export default function TVChartContainer({
               disableSelection: true,
               disableSave: true,
               disableUndo: true,
-              overrides: {
+            overrides: {
                 "linetoolhorzline.linecolor": level.color,
                 "linetoolhorzline.linewidth": level.lineWidth ?? 2,
+                "linetoolhorzline.linestyle": level.lineStyle ?? 0,
                 "linetoolhorzline.showPrice": true,
                 "linetoolhorzline.textcolor": level.color,
+                "linetoolhorzline.vertLabelsAlign": level.labelAlign ?? "top",
               },
             }
           );
