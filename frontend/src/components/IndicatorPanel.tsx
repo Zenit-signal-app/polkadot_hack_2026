@@ -5,6 +5,7 @@ import {
   LineStyle,
   LineWidth,
   type IChartApi,
+  type SeriesMarker,
   type UTCTimestamp,
   type Time,
   TickMarkType,
@@ -1377,6 +1378,42 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
   const latestEma26 = ema26Data[ema26Data.length - 1]?.value;
   const latestRsi = rsi14Data[rsi14Data.length - 1]?.value;
   const latestMomentum = momentumData[momentumData.length - 1]?.value;
+  const prevEma12 = ema12Data[ema12Data.length - 2];
+  const prevEma26 = ema26Data[ema26Data.length - 2];
+  const currEma12 = ema12Data[ema12Data.length - 1];
+  const currEma26 = ema26Data[ema26Data.length - 1];
+  const goldenCross =
+    prevEma12 &&
+    prevEma26 &&
+    currEma12 &&
+    currEma26 &&
+    prevEma12.value <= prevEma26.value &&
+    currEma12.value > currEma26.value;
+  const deathCross =
+    prevEma12 &&
+    prevEma26 &&
+    currEma12 &&
+    currEma26 &&
+    prevEma12.value >= prevEma26.value &&
+    currEma12.value < currEma26.value;
+  const priceAboveSma = latestPrice && latestSma ? latestPrice > latestSma : false;
+  const priceBelowSma = latestPrice && latestSma ? latestPrice < latestSma : false;
+  const emaAboveSma =
+    currEma12 && currEma26 && latestSma ? currEma12.value > latestSma && currEma26.value > latestSma : false;
+  const emaBelowSma =
+    currEma12 && currEma26 && latestSma ? currEma12.value < latestSma && currEma26.value < latestSma : false;
+  const nearSma = latestPrice && latestSma ? Math.abs(latestPrice - latestSma) <= latestSma * 0.01 : false;
+  const nearEma12 = latestPrice && currEma12 ? Math.abs(latestPrice - currEma12.value) <= currEma12.value * 0.01 : false;
+  const pullbackLong = nearSma || nearEma12;
+  const pullbackShort = nearSma || nearEma12;
+  const longSignal =
+    goldenCross && priceAboveSma && emaAboveSma && pullbackLong
+      ? { time: currEma12.time, price: latestPrice ?? currEma12.value }
+      : null;
+  const shortSignal =
+    deathCross && priceBelowSma && emaBelowSma && pullbackShort
+      ? { time: currEma12.time, price: latestPrice ?? currEma12.value }
+      : null;
 
   const smaDelta = latestPrice && latestSma ? ((latestSma - latestPrice) / latestPrice) * 100 : undefined;
   const ema12Delta = latestPrice && latestEma12 ? ((latestEma12 - latestPrice) / latestPrice) * 100 : undefined;
@@ -1437,6 +1474,32 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
     { label: "HalfTrend", value: latestHT, color: "#94a3b8" },
   ];
 
+  const signalMarkers = useMemo<SeriesMarker<Time>[]>(
+    () => {
+      const markers: SeriesMarker<Time>[] = [];
+      if (longSignal) {
+        markers.push({
+          time: longSignal.time,
+          position: "belowBar",
+          color: "#22c55e",
+          shape: "arrowUp",
+          text: "Long",
+        });
+      }
+      if (shortSignal) {
+        markers.push({
+          time: shortSignal.time,
+          position: "aboveBar",
+          color: "#ef4444",
+          shape: "arrowDown",
+          text: "Short",
+        });
+      }
+      return markers;
+    },
+    [longSignal, shortSignal]
+  );
+
   const lastUpdate = history[history.length - 1]
     ? new Date(history[history.length - 1].time * 1000).toLocaleTimeString([], {
         hour: "2-digit",
@@ -1458,6 +1521,11 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
     if (!htSeriesRef.current || !htLineData.length) return;
     htSeriesRef.current.setData(htLineData);
   }, [htLineData]);
+
+  useEffect(() => {
+    if (!priceSeriesRef.current) return;
+    priceSeriesRef.current.setMarkers(signalMarkers);
+  }, [signalMarkers]);
 
   useEffect(() => {
     if (!chartRef.current) return;
