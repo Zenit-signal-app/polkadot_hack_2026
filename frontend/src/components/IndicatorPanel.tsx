@@ -24,7 +24,9 @@ declare global {
 }
 
 const SMA_LENGTH = 14;
-const EMA_LENGTH = 12;
+const EMA_SHORT_LENGTH = 12;
+const EMA_MID_LENGTH = 14;
+const EMA_LONG_LENGTH = 26;
 const RSI_LENGTH = 14;
 const MOMENTUM_LENGTH = 12;
 const ADX_LENGTH = 14;
@@ -1174,7 +1176,8 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
   const chartRef = useRef<IChartApi | null>(null);
   const priceSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
   const smaSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
-  const emaSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
+  const ema12SeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
+  const ema26SeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
   const htSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
   const [history, setHistory] = useState<BenchmarkHistoryPoint[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1269,11 +1272,17 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
       lineStyle: 2,
       title: `SMA(${SMA_LENGTH})`,
     });
-    emaSeriesRef.current = chart.addLineSeries({
+    ema12SeriesRef.current = chart.addLineSeries({
       color: "#a78bfa",
       lineWidth: 2,
       lineStyle: 2,
-      title: `EMA(${EMA_LENGTH})`,
+      title: `EMA(${EMA_SHORT_LENGTH})`,
+    });
+    ema26SeriesRef.current = chart.addLineSeries({
+      color: "#fb7185",
+      lineWidth: 2,
+      lineStyle: 2,
+      title: `EMA(${EMA_LONG_LENGTH})`,
     });
     htSeriesRef.current = chart.addLineSeries({
       color: "#94a3b8",
@@ -1295,7 +1304,8 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
       chartRef.current = null;
       priceSeriesRef.current = null;
       smaSeriesRef.current = null;
-      emaSeriesRef.current = null;
+      ema12SeriesRef.current = null;
+      ema26SeriesRef.current = null;
       htSeriesRef.current = null;
       setChartInitialized(false);
     };
@@ -1341,7 +1351,9 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
     [history]
   );
   const smaData = useMemo(() => calculateSMA(history, SMA_LENGTH), [history]);
-  const emaData = useMemo(() => calculateEMA(history, EMA_LENGTH), [history]);
+  const ema12Data = useMemo(() => calculateEMA(history, EMA_SHORT_LENGTH), [history]);
+  const ema14Data = useMemo(() => calculateEMA(history, EMA_MID_LENGTH), [history]);
+  const ema26Data = useMemo(() => calculateEMA(history, EMA_LONG_LENGTH), [history]);
   const rsi14Data = useMemo(() => calculateRSI(history, RSI_LENGTH), [history]);
   const rsi28Data = useMemo(() => calculateRSI(history, 28), [history]);
   const momentumData = useMemo(() => calculateMomentum(history, MOMENTUM_LENGTH), [history]);
@@ -1360,12 +1372,15 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
     return Number(candidate.toFixed(4));
   }, [latestPrice, symbol]);
   const latestSma = smaData[smaData.length - 1]?.value;
-  const latestEma = emaData[emaData.length - 1]?.value;
+  const latestEma12 = ema12Data[ema12Data.length - 1]?.value;
+  const latestEma14 = ema14Data[ema14Data.length - 1]?.value;
+  const latestEma26 = ema26Data[ema26Data.length - 1]?.value;
   const latestRsi = rsi14Data[rsi14Data.length - 1]?.value;
   const latestMomentum = momentumData[momentumData.length - 1]?.value;
 
   const smaDelta = latestPrice && latestSma ? ((latestSma - latestPrice) / latestPrice) * 100 : undefined;
-  const emaDelta = latestPrice && latestEma ? ((latestEma - latestPrice) / latestPrice) * 100 : undefined;
+  const ema12Delta = latestPrice && latestEma12 ? ((latestEma12 - latestPrice) / latestPrice) * 100 : undefined;
+  const ema14Delta = latestPrice && latestEma14 ? ((latestEma14 - latestPrice) / latestPrice) * 100 : undefined;
   const rsiLabel =
     latestRsi == null ? "—" : latestRsi >= 70 ? "Overbought" : latestRsi <= 30 ? "Oversold" : "Neutral";
   const momentumLabel =
@@ -1416,7 +1431,8 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
   const latestHT = halfTrendData[halfTrendData.length - 1]?.value;
   const legendItems = [
     { label: "Price", value: latestPrice, color: "#38bdf8" },
-    { label: `EMA(${EMA_LENGTH})`, value: latestEma, color: "#a78bfa" },
+    { label: `EMA(${EMA_SHORT_LENGTH})`, value: latestEma12, color: "#a78bfa" },
+    { label: `EMA(${EMA_LONG_LENGTH})`, value: latestEma26, color: "#fb7185" },
     { label: `SMA(${SMA_LENGTH})`, value: latestSma, color: "#facc15" },
     { label: "HalfTrend", value: latestHT, color: "#94a3b8" },
   ];
@@ -1432,10 +1448,11 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
     if (!chartRef.current) return;
     priceSeriesRef.current?.setData(priceData);
     smaSeriesRef.current?.setData(smaData);
-    emaSeriesRef.current?.setData(emaData);
+    ema12SeriesRef.current?.setData(ema12Data);
+    ema26SeriesRef.current?.setData(ema26Data);
     chartRef.current.timeScale().fitContent();
     chartRef.current.priceScale("right").applyOptions({ autoScale: true });
-  }, [priceData, smaData, emaData]);
+  }, [priceData, smaData, ema12Data, ema26Data]);
 
   useEffect(() => {
     if (!htSeriesRef.current || !htLineData.length) return;
@@ -1466,16 +1483,21 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
             {symbol} · {resolution ?? "1D"} · {lastUpdate}
           </span>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-left text-sm mb-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-left text-sm mb-4">
           <div className="rounded-xl border border-[#363a59] bg-[#121421] p-3">
             <p className="text-[10px] uppercase text-slate-400 mb-1">SMA ({SMA_LENGTH})</p>
             <div className="text-lg font-semibold text-white">${latestSma?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? "—"}</div>
             <p className="text-[11px] text-slate-500">{formatPercent(smaDelta)} vs price</p>
           </div>
           <div className="rounded-xl border border-[#363a59] bg-[#121421] p-3">
-            <p className="text-[10px] uppercase text-slate-400 mb-1">EMA ({EMA_LENGTH})</p>
-            <div className="text-lg font-semibold text-white">${latestEma?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? "—"}</div>
-            <p className="text-[11px] text-slate-500">{formatPercent(emaDelta)} vs price</p>
+            <p className="text-[10px] uppercase text-slate-400 mb-1">EMA ({EMA_SHORT_LENGTH})</p>
+            <div className="text-lg font-semibold text-white">${latestEma12?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? "—"}</div>
+            <p className="text-[11px] text-slate-500">{formatPercent(ema12Delta)} vs price</p>
+          </div>
+          <div className="rounded-xl border border-[#363a59] bg-[#121421] p-3">
+            <p className="text-[10px] uppercase text-slate-400 mb-1">EMA ({EMA_MID_LENGTH})</p>
+            <div className="text-lg font-semibold text-white">${latestEma14?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? "—"}</div>
+            <p className="text-[11px] text-slate-500">{formatPercent(ema14Delta)} vs price</p>
           </div>
           <div className="rounded-xl border border-[#363a59] bg-[#121421] p-3">
             <p className="text-[10px] uppercase text-slate-400 mb-1">RSI ({RSI_LENGTH})</p>

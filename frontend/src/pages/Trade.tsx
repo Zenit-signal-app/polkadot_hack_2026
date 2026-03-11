@@ -637,7 +637,7 @@ export default function Trade() {
       if (price == null || Number.isNaN(price) || !Number.isFinite(price)) return;
       lines.push({ name, price, color, lineStyle, labelAlign, lineWidth });
     };
-    addLine("Entry Price", effectiveEntryPrice, "#ffffff", 0, "top", 1);
+    addLine("Entry Price", effectiveEntryPrice, "#ffffff", 0, "top", 0.5);
     addLine("Liquidation", previewLiquidationPrice, "#ef4444", 1, "bottom", 1);
     addLine("Take Profit", previewTakeProfitPrice, "#22c55e", 1, "top", 1);
     addLine("Stop Loss", previewStopLossPrice, "#eab308", 1, "bottom", 1);
