@@ -616,6 +616,26 @@ export default function Trade() {
     stopLossPercent,
   ]);
 
+  const chartOrderLines = useMemo(() => {
+    if (!hasPosition) return undefined;
+    const lines: Array<{ name: string; price: number; color: string; lineWidth?: number }> = [];
+    const addLine = (name: string, price: number | null | undefined, color: string, lineWidth?: number) => {
+      if (price == null || Number.isNaN(price) || !Number.isFinite(price)) return;
+      lines.push({ name, price, color, lineWidth });
+    };
+    addLine("Entry Price", effectiveEntryPrice, "#facc15", 2);
+    addLine("Liquidation", previewLiquidationPrice, "#fb7185", 2);
+    addLine("Take Profit", previewTakeProfitPrice, "#34d399", 2);
+    addLine("Stop Loss", previewStopLossPrice, "#f87171", 2);
+    return lines.length > 0 ? lines : undefined;
+  }, [
+    hasPosition,
+    effectiveEntryPrice,
+    previewLiquidationPrice,
+    previewTakeProfitPrice,
+    previewStopLossPrice,
+  ]);
+
   const historyTabOptions = [
     { key: "timeline", label: "Order Timeline" },
     { key: "open", label: "Open Positions" },
@@ -916,6 +936,7 @@ export default function Trade() {
                 referenceLabel={chartLabel}
                 onIntervalChange={setChartResolution}
                 onTimeScaleRightOffsetChange={handleTimeScaleRightOffsetChange}
+              tpoLevels={chartOrderLines}
               />
             </ErrorBoundary>
             <IndicatorPanel

@@ -1,6 +1,5 @@
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, NavLink, Link } from "react-router-dom";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { Link } from "react-router-dom";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import Trade from "./pages/Trade";
 import Rewards from "./pages/Rewards";
@@ -15,12 +14,30 @@ function Layout({ children }: { children: React.ReactNode }) {
           <span className="text-slate-500 text-sm hidden sm:inline">Perpetual DEX</span>
         </Link>
         <nav className="flex items-center gap-1">
-          <Link to="/" className="px-4 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-[#1e2033] transition font-medium">
+          <NavLink
+            to="/"
+            className={({ isActive }) =>
+              `px-4 py-2 rounded-lg transition font-medium ${
+                isActive
+                  ? "text-white bg-gradient-to-r from-blue-500 to-sky-500 shadow-lg shadow-blue-500/30"
+                  : "text-slate-400 hover:text-white hover:bg-[#1e2033]"
+              }`
+            }
+          >
             Trade
-          </Link>
-          <Link to="/rewards" className="px-4 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-[#1e2033] transition font-medium">
+          </NavLink>
+          <NavLink
+            to="/rewards"
+            className={({ isActive }) =>
+              `px-4 py-2 rounded-lg transition font-medium ${
+                isActive
+                  ? "text-white bg-gradient-to-r from-blue-500 to-sky-500 shadow-lg shadow-blue-500/30"
+                  : "text-slate-400 hover:text-white hover:bg-[#1e2033]"
+              }`
+            }
+          >
             Rewards
-          </Link>
+          </NavLink>
           <div className="ml-4">
             <ConnectButton />
           </div>
