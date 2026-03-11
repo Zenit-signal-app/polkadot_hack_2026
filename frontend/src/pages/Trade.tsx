@@ -1,9 +1,9 @@
 import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt, usePublicClient } from "wagmi";
 import { parseUnits, formatUnits } from "viem";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { CONTRACTS } from "@/config/contracts";
-import { PERPETUAL_DEX_ABI } from "@/abis/PerpetualDEX";
+import { PERPETUAL_DEX_ABI, symbolToBytes32 } from "@/abis/PerpetualDEX";
 import { ERC20_ABI } from "@/abis/Token";
 import IndicatorPanel from "@/components/IndicatorPanel";
 import TVChartContainer from "@/components/TVChartContainer";
@@ -18,6 +18,7 @@ const POSITION_TYPE = { Long: 0, Short: 1 } as const;
 type PositionData = { amount: bigint; position: number; leverage: number };
 type HistoryEntry = {
   id: string;
+  symbol?: PolkadotSymbol;
   action: "open" | "increase" | "close";
   type: "Long" | "Short" | "N/A";
   amount: string;
@@ -167,19 +168,45 @@ export default function Trade() {
   const [depositHistory, setDepositHistory] = useState<Array<{ id: string; amount: number; timestamp: number }>>([]);
   const [withdrawHistory, setWithdrawHistory] = useState<Array<{ id: string; amount: number; timestamp: number }>>([]);
 
-  const { data: dexBalance } = useReadContract({
+  const { data: dexBalance, refetch: refetchDexBalance } = useReadContract({
     address: CONTRACTS.DEX,
     abi: PERPETUAL_DEX_ABI,
     functionName: "balanceOf",
     args: address ? [address] : undefined,
   });
 
-  const { data: position } = useReadContract({
+  const { data: positionBtc, refetch: refetchBtc } = useReadContract({
     address: CONTRACTS.DEX,
     abi: PERPETUAL_DEX_ABI,
     functionName: "getCurrentPosition",
-    args: address ? [address] : undefined,
+    args: address ? [address, symbolToBytes32("BTCUSD")] : undefined,
   });
+  const { data: positionEth, refetch: refetchEth } = useReadContract({
+    address: CONTRACTS.DEX,
+    abi: PERPETUAL_DEX_ABI,
+    functionName: "getCurrentPosition",
+    args: address ? [address, symbolToBytes32("ETHUSD")] : undefined,
+  });
+  const { data: positionDot, refetch: refetchDot } = useReadContract({
+    address: CONTRACTS.DEX,
+    abi: PERPETUAL_DEX_ABI,
+    functionName: "getCurrentPosition",
+    args: address ? [address, symbolToBytes32("DOTUSD")] : undefined,
+  });
+  const refetchPositions = useCallback(() => {
+    refetchBtc();
+    refetchEth();
+    refetchDot();
+  }, [refetchBtc, refetchEth, refetchDot]);
+  const positionsBySymbol = useMemo(
+    () => ({
+      BTCUSD: positionBtc as PositionData | undefined,
+      ETHUSD: positionEth as PositionData | undefined,
+      DOTUSD: positionDot as PositionData | undefined,
+    }),
+    [positionBtc, positionEth, positionDot],
+  );
+  const position = positionsBySymbol[chartSymbol];
 
   const { data: tokenBalance } = useReadContract({
     address: CONTRACTS.TOKEN,
@@ -200,23 +227,20 @@ export default function Trade() {
   const { isLoading: isOpenPending } = useWaitForTransactionReceipt({ hash: openHash });
   const { isLoading: isIncreasePending } = useWaitForTransactionReceipt({ hash: increaseHash });
   const { isLoading: isClosePending } = useWaitForTransactionReceipt({ hash: closeHash });
+  const [isSubmittingPosition, setIsSubmittingPosition] = useState(false);
 
   const publicClient = usePublicClient();
 
   const captureTxFee = useCallback(
-    async (txPromise: Promise<`0x${string}` | undefined>) => {
-      if (!publicClient) return 0;
-      try {
-        const hash = await txPromise;
-        if (!hash) return 0;
-        const receipt = await publicClient.waitForTransactionReceipt({ hash: hash as `0x${string}` });
-        const gasUsed = receipt.gasUsed ?? 0n;
-        const gasPrice = receipt.effectiveGasPrice ?? 0n;
-        if (gasUsed === 0n || gasPrice === 0n) return 0;
-        return Number(formatUnits(gasUsed * gasPrice, 18));
-      } catch {
-        return 0;
-      }
+    async (txPromise: Promise<`0x${string}` | undefined>): Promise<number> => {
+      if (!publicClient) throw new Error("No public client");
+      const hash = await txPromise;
+      if (!hash) throw new Error("Transaction was not sent");
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: hash as `0x${string}` });
+      const gasUsed = receipt.gasUsed ?? 0n;
+      const gasPrice = receipt.effectiveGasPrice ?? 0n;
+      if (gasUsed === 0n || gasPrice === 0n) return 0;
+      return Number(formatUnits(gasUsed * gasPrice, 18));
     },
     [publicClient],
   );
@@ -253,92 +277,115 @@ export default function Trade() {
   const handleOpenPosition = async () => {
     if (!positionAmount) return;
     const amountStr = positionAmount;
-    setPositionAmount("");
     const priceSnapshot = displayPrice?.price ?? chartPrice?.price ?? null;
-    if (priceSnapshot) setEntryPrice(priceSnapshot);
-    const parsedAmount = Number(amountStr);
     const entryPriceValue = priceSnapshot ?? 0;
+    const parsedAmount = Number(amountStr);
     const volume = parsedAmount * leverage;
-    const txFee = await captureTxFee(
-      openPosAsync({
-        address: CONTRACTS.DEX,
-        abi: PERPETUAL_DEX_ABI,
-        functionName: "openPosition",
-        args: [parseUnits(amountStr, 18), POSITION_TYPE[positionType], leverage],
-      }),
-    );
-    const newEntry: HistoryEntry = {
-      id: crypto.randomUUID?.() ?? `${Date.now()}-open`,
-      action: "open",
-      type: positionType,
-      amount: amountStr,
-      leverage,
-      entryPrice: entryPriceValue,
-      status: "open",
-      timestamp: Date.now(),
-      fee: txFee,
-      takeProfit: takeProfitPrice ?? null,
-      stopLoss: stopLossPrice ?? null,
-      volume,
-    };
-    setTradeHistory((prev) => [newEntry, ...prev]);
+    setIsSubmittingPosition(true);
+    try {
+      const txFee = await captureTxFee(
+        openPosAsync({
+          address: CONTRACTS.DEX,
+          abi: PERPETUAL_DEX_ABI,
+          functionName: "openPosition",
+          args: [symbolToBytes32(chartSymbol), parseUnits(amountStr, 18), POSITION_TYPE[positionType], leverage],
+          gas: 500000n,
+        }),
+      );
+      if (priceSnapshot) setEntryPrice(priceSnapshot);
+      const newEntry: HistoryEntry = {
+        id: crypto.randomUUID?.() ?? `${Date.now()}-open`,
+        symbol: chartSymbol,
+        action: "open",
+        type: positionType,
+        amount: amountStr,
+        leverage,
+        entryPrice: entryPriceValue,
+        status: "open",
+        timestamp: Date.now(),
+        fee: txFee,
+        takeProfit: previewTakeProfitPrice ?? null,
+        stopLoss: previewStopLossPrice ?? null,
+        volume,
+      };
+      setTradeHistory((prev) => [newEntry, ...prev]);
+      refetchPositions();
+      refetchDexBalance();
+    } catch {
+      setPositionAmount(amountStr);
+    } finally {
+      setIsSubmittingPosition(false);
+    }
   };
 
   const handleIncreasePosition = async () => {
     if (!positionAmount) return;
     const amountStr = positionAmount;
-    setPositionAmount("");
     const priceSnapshot = displayPrice?.price ?? chartPrice?.price ?? null;
-    if (priceSnapshot) setEntryPrice(priceSnapshot);
-    const parsedAmount = Number(amountStr);
     const entryPriceValue = priceSnapshot ?? 0;
+    const parsedAmount = Number(amountStr);
     const volume = parsedAmount * leverage;
-    const txFee = await captureTxFee(
-      increasePosAsync({
-        address: CONTRACTS.DEX,
-        abi: PERPETUAL_DEX_ABI,
-        functionName: "increasePosition",
-        args: [parseUnits(amountStr, 18)],
-      }),
-    );
-    const newEntry: HistoryEntry = {
-      id: crypto.randomUUID?.() ?? `${Date.now()}-increase`,
-      action: "increase",
-      type: positionType,
-      amount: amountStr,
-      leverage,
-      entryPrice: entryPriceValue,
-      status: "open",
-      timestamp: Date.now(),
-      fee: txFee,
-      takeProfit: takeProfitPrice ?? null,
-      stopLoss: stopLossPrice ?? null,
-      volume,
-    };
-    setTradeHistory((prev) => [newEntry, ...prev]);
+    setIsSubmittingPosition(true);
+    try {
+      const txFee = await captureTxFee(
+        increasePosAsync({
+          address: CONTRACTS.DEX,
+          abi: PERPETUAL_DEX_ABI,
+          functionName: "increasePosition",
+          args: [symbolToBytes32(chartSymbol), parseUnits(amountStr, 18)],
+          gas: 400000n,
+        }),
+      );
+      setPositionAmount("");
+      if (priceSnapshot) setEntryPrice(priceSnapshot);
+      const newEntry: HistoryEntry = {
+        id: crypto.randomUUID?.() ?? `${Date.now()}-increase`,
+        symbol: chartSymbol,
+        action: "increase",
+        type: positionType,
+        amount: amountStr,
+        leverage,
+        entryPrice: entryPriceValue,
+        status: "open",
+        timestamp: Date.now(),
+        fee: txFee,
+        takeProfit: previewTakeProfitPrice ?? null,
+        stopLoss: previewStopLossPrice ?? null,
+        volume,
+      };
+      setTradeHistory((prev) => [newEntry, ...prev]);
+      refetchPositions();
+      refetchDexBalance();
+    } catch {
+      setPositionAmount(amountStr);
+    } finally {
+      setIsSubmittingPosition(false);
+    }
   };
 
-  const handleClosePosition = async (amountOverride?: string) => {
+  const handleClosePosition = async (market: PolkadotSymbol, amountOverride?: string) => {
     const amountValue = amountOverride ?? closeAmount;
     if (!amountValue) return;
-    const txFee = await captureTxFee(
-      closePosAsync({
-        address: CONTRACTS.DEX,
-        abi: PERPETUAL_DEX_ABI,
-        functionName: "closePosition",
-        args: [parseUnits(amountValue, 18)],
-      }),
-    );
-    setCloseAmount("");
     const closePrice = displayPrice?.price ?? chartPrice?.price ?? 0;
     const amountNumber = Number(amountValue);
     const entryPriceValue = entryPrice ?? closePrice;
     const closingLeverage = pos?.leverage ?? leverage;
     const volume = amountNumber * closingLeverage;
-    setTradeHistory((prev): HistoryEntry[] => {
+    try {
+      const txFee = await captureTxFee(
+        closePosAsync({
+          address: CONTRACTS.DEX,
+          abi: PERPETUAL_DEX_ABI,
+          functionName: "closePosition",
+          args: [symbolToBytes32(market), parseUnits(amountValue, 18)],
+          gas: 400000n,
+        }),
+      );
+      setCloseAmount("");
+      setTradeHistory((prev): HistoryEntry[] => {
       let replaced = false;
       const updatedHistory: HistoryEntry[] = prev.map((entry) => {
-        if (!replaced && entry.status === "open") {
+        if (!replaced && entry.status === "open" && (entry.symbol === market || !entry.symbol)) {
           replaced = true;
           return {
             ...entry,
@@ -350,8 +397,8 @@ export default function Trade() {
             status: "closed",
             timestamp: Date.now(),
             fee: txFee,
-            takeProfit: takeProfitPrice ?? null,
-            stopLoss: stopLossPrice ?? null,
+            takeProfit: previewTakeProfitPrice ?? null,
+            stopLoss: previewStopLossPrice ?? null,
             volume,
           };
         }
@@ -360,6 +407,7 @@ export default function Trade() {
       if (!replaced) {
         const fallbackEntry: HistoryEntry = {
           id: crypto.randomUUID?.() ?? `${Date.now()}-close`,
+          symbol: market,
           action: "close",
           type: (posTypeStr === "-" ? "N/A" : (posTypeStr as "Long" | "Short")),
           amount: amountValue,
@@ -369,14 +417,21 @@ export default function Trade() {
           status: "closed",
           timestamp: Date.now(),
           fee: txFee,
-          takeProfit: takeProfitPrice ?? null,
-          stopLoss: stopLossPrice ?? null,
+          takeProfit: previewTakeProfitPrice ?? null,
+          stopLoss: previewStopLossPrice ?? null,
           volume,
         };
         return [fallbackEntry, ...prev];
       }
       return updatedHistory;
     });
+      refetchPositions();
+      refetchDexBalance();
+    } catch {
+      if (!amountOverride) setCloseAmount(amountValue);
+    } finally {
+      setIsSubmittingPosition(false);
+    }
   };
 
   const handleTimeScaleRightOffsetChange = useCallback((offset: number) => {
@@ -384,7 +439,7 @@ export default function Trade() {
   }, []);
 
   const pos = position as PositionData | undefined;
-  const hasPosition = pos && pos.amount > 0n;
+  const hasPosition = Boolean(pos && pos.amount > 0n);
   const posTypeStr = pos ? (pos.position === 0 ? "Long" : "Short") : "-";
   const positionMargin = pos ? Number(formatUnits(pos.amount, 18)) : 0;
   const positionSide = pos ? (pos.position === 0 ? "Long" : "Short") : "Long";
@@ -401,6 +456,9 @@ export default function Trade() {
   const [entryPrice, setEntryPrice] = useState<number | null>(null);
   const [targetPercent, setTargetPercent] = useState(5);
   const [stopLossPercent, setStopLossPercent] = useState(2);
+  const [previewLiquidationPrice, setPreviewLiquidationPrice] = useState<number | null>(null);
+  const [previewTakeProfitPrice, setPreviewTakeProfitPrice] = useState<number | null>(null);
+  const [previewStopLossPrice, setPreviewStopLossPrice] = useState<number | null>(null);
   const [infoModal, setInfoModal] = useState<{ title: string; body: string } | null>(null);
   const [closeConfirmEntry, setCloseConfirmEntry] = useState<HistoryEntry | null>(null);
   const handlePositionAmountChange = useCallback(
@@ -442,6 +500,13 @@ export default function Trade() {
     }
     return normalizedAmount * leverage;
   }, [closeAmount, positionAmount, leverage, pos?.leverage]);
+  const prevHasPosition = useRef<boolean>(hasPosition);
+  useEffect(() => {
+    if (prevHasPosition.current && !hasPosition) {
+      setLeverage(2);
+    }
+    prevHasPosition.current = hasPosition;
+  }, [hasPosition]);
 
   useEffect(() => {
     setEntryPrice(displayPrice?.price ?? null);
@@ -467,36 +532,89 @@ export default function Trade() {
 
     const depositedAmount = formatUnits(dexBalance, 18);
     let positionSummary = "You currently have no open positions.";
-    if (hasPosition && pos) {
-      positionSummary = `You are holding ${formatUnits(pos.amount, 18)} ${posTypeStr} with ${pos.leverage}x leverage.`;
+    const activePositions: string[] = [];
+    for (const sym of POLKADOT_SYMBOLS) {
+      const p = positionsBySymbol[sym];
+      if (p && p.amount > 0n) {
+        const side = p.position === 0 ? "Long" : "Short";
+        activePositions.push(`${formatUnits(p.amount, 18)} ${sym} ${side} @ ${p.leverage}x`);
+      }
+    }
+    if (activePositions.length > 0) {
+      positionSummary = `Open: ${activePositions.join("; ")}.`;
     }
 
     setInfoModal({
       title: "Account Snapshot",
       body: `You have deposited ${depositedAmount} zUSDC. ${positionSummary}`,
     });
-  }, [address, dexBalance, hasPosition, pos, posTypeStr]);
+  }, [address, dexBalance, positionsBySymbol]);
 
-  const liquidationPrice =
-    entryPrice && pos
+  const effectiveEntryPrice = entryPrice ?? displayPrice?.price ?? null;
+  const effectiveSide =
+    hasPosition && pos
       ? pos.position === 0
-        ? entryPrice * (1 - 1 / pos.leverage)
-        : entryPrice * (1 + 1 / pos.leverage)
-      : null;
+        ? "Long"
+        : "Short"
+      : positionType;
+  const effectiveLeverage =
+    hasPosition && pos ? pos.leverage : Math.max(1, leverage);
 
-  const takeProfitPrice =
-    entryPrice && pos
-      ? pos.position === 0
-        ? entryPrice * (1 + targetPercent / 100)
-        : entryPrice * Math.max(0, 1 - targetPercent / 100)
-      : null;
+  const calculatePreviewValues = useCallback(
+    (
+      price: number | null,
+      leverageValue: number,
+      side: "Long" | "Short",
+      tpPercentage: number,
+      slPercentage: number
+    ) => {
+      if (price == null || leverageValue <= 0) {
+        return {
+          liquidationPrice: null,
+          takeProfitPrice: null,
+          stopLossPrice: null,
+        };
+      }
+      const safeLeverage = Math.max(1, leverageValue);
+      const liquidationPrice =
+        side === "Long"
+          ? price * (1 - 0.9 / safeLeverage)
+          : price * (1 + 0.9 / safeLeverage);
+      const tpDelta = tpPercentage / 100 / safeLeverage;
+      const slDelta = slPercentage / 100 / safeLeverage;
+      const takeProfitPrice =
+        side === "Long" ? price * (1 + tpDelta) : price * Math.max(0, 1 - tpDelta);
+      const stopLossPrice =
+        side === "Long" ? price * Math.max(0, 1 - slDelta) : price * (1 + slDelta);
+      return {
+        liquidationPrice,
+        takeProfitPrice,
+        stopLossPrice,
+      };
+    },
+    []
+  );
 
-  const stopLossPrice =
-    entryPrice && pos
-      ? pos.position === 0
-        ? entryPrice * Math.max(0, 1 - stopLossPercent / 100)
-        : entryPrice * (1 + stopLossPercent / 100)
-      : null;
+  useEffect(() => {
+    const basePrice = effectiveEntryPrice;
+    const preview = calculatePreviewValues(
+      basePrice,
+      effectiveLeverage,
+      effectiveSide,
+      targetPercent,
+      stopLossPercent
+    );
+    setPreviewLiquidationPrice(preview.liquidationPrice);
+    setPreviewTakeProfitPrice(preview.takeProfitPrice);
+    setPreviewStopLossPrice(preview.stopLossPrice);
+  }, [
+    calculatePreviewValues,
+    effectiveEntryPrice,
+    effectiveLeverage,
+    effectiveSide,
+    targetPercent,
+    stopLossPercent,
+  ]);
 
   const historyTabOptions = [
     { key: "timeline", label: "Order Timeline" },
@@ -517,20 +635,34 @@ export default function Trade() {
   }, [depositHistory, withdrawHistory]);
 
   const openPositionEntries = useMemo(() => tradeHistory.filter((entry) => entry.status === "open"), [tradeHistory]);
-  const openPositionMargin = useMemo(
-    () => openPositionEntries.reduce((sum, entry) => sum + Number(entry.amount), 0),
-    [openPositionEntries],
-  );
-  const openPositionSide =
-    openPositionEntries[openPositionEntries.length - 1]?.type ?? posTypeStr;
+  const openPositionMargin = useMemo(() => {
+    let total = 0;
+    for (const sym of POLKADOT_SYMBOLS) {
+      const p = positionsBySymbol[sym];
+      if (p && p.amount > 0n) total += Number(formatUnits(p.amount, 18));
+    }
+    return total;
+  }, [positionsBySymbol]);
+  const openPositionSide = useMemo(() => {
+    const sides = new Set<string>();
+    for (const sym of POLKADOT_SYMBOLS) {
+      const p = positionsBySymbol[sym];
+      if (p && p.amount > 0n) sides.add(p.position === 0 ? "Long" : "Short");
+    }
+    if (sides.size > 1) return "Multiple";
+    if (sides.size === 1) return [...sides][0]!;
+    return openPositionEntries.length > 0 ? openPositionEntries[openPositionEntries.length - 1]?.type ?? posTypeStr : posTypeStr;
+  }, [positionsBySymbol, openPositionEntries, posTypeStr]);
 
   const renderHistoryEntry = (entry: HistoryEntry) => {
-    const pnlValue = calculatePnL(entry, displayPrice?.price);
+    const entrySymbol = entry.symbol ?? chartSymbol;
+    const entryPriceData = getPrice(entrySymbol);
+    const currentPrice = entryPriceData?.price;
+    const pnlValue = calculatePnL(entry, currentPrice);
     const sizeValue = entry.volume ?? Number(entry.amount) * entry.leverage;
     const closeTimestamp = entry.status === "closed" ? formatTimestamp(entry.timestamp) : "Open";
     const pnlClass =
       pnlValue == null ? "text-slate-400" : pnlValue >= 0 ? "text-emerald-400" : "text-rose-400";
-    const currentPrice = displayPrice?.price;
     const priceTextColor =
       currentPrice == null || entry.entryPrice == null
         ? "text-white"
@@ -559,18 +691,19 @@ export default function Trade() {
       >
         <div className="flex flex-nowrap gap-3 text-[11px] sm:text-[12px]">
           {[
+            ["Market", entrySymbol],
             ["Time", formatTimestamp(entry.timestamp)],
             ["Position", entry.type],
-            ["Entry", formatForSymbol(entry.entryPrice, chartSymbol)],
-            ["Price", displayPrice ? formatForSymbol(displayPrice.price ?? null, chartSymbol) : "—"],
+            ["Entry", formatForSymbol(entry.entryPrice, entrySymbol)],
+            ["Price", currentPrice != null ? formatForSymbol(currentPrice, entrySymbol) : "—"],
             ["Liq. Price", isNaN(Number(liqPriceStr)) ? "—" : formatCurrency(Number(liqPriceStr))],
             ["Margin", formatZUSDCNumber(Number(entry.amount))],
             ["Leverage", `${entry.leverage}x`],
             ["Size", formatCurrency(sizeValue)],
             ["Exc Fee", formatCurrency(entry.fee)],
             ["PnL", pnlValue == null ? "—" : formatCurrency(pnlValue)],
-            ["Take Profit", formatForSymbol(entry.takeProfit, chartSymbol)],
-            ["Stop Loss", formatForSymbol(entry.stopLoss, chartSymbol)],
+            ["Take Profit", formatForSymbol(entry.takeProfit, entrySymbol)],
+            ["Stop Loss", formatForSymbol(entry.stopLoss, entrySymbol)],
             [
               "Status",
               entry.status === "open" ? "Open" : `Closed · ${closeTimestamp}`,
@@ -644,6 +777,10 @@ export default function Trade() {
             </p>
             <div className="mt-4 space-y-2 rounded-xl border border-[#363a59] bg-[#121421]/60 p-4 text-sm">
               <div className="flex justify-between">
+                <span className="text-slate-400">Market</span>
+                <span>{closeConfirmEntry.symbol ?? chartSymbol}</span>
+              </div>
+              <div className="flex justify-between">
                 <span className="text-slate-400">Position</span>
                 <span className={closeConfirmEntry.type === "Long" ? "text-emerald-400" : "text-rose-400"}>
                   {closeConfirmEntry.type}
@@ -659,20 +796,20 @@ export default function Trade() {
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">Entry Price</span>
-                <span>{formatForSymbol(closeConfirmEntry.entryPrice, chartSymbol)}</span>
+                <span>{formatForSymbol(closeConfirmEntry.entryPrice, closeConfirmEntry.symbol ?? chartSymbol)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">Current Price</span>
-                <span>{displayPrice ? formatForSymbol(displayPrice.price ?? null, chartSymbol) : "—"}</span>
+                <span>{formatForSymbol(getPrice(closeConfirmEntry.symbol ?? chartSymbol)?.price ?? null, closeConfirmEntry.symbol ?? chartSymbol)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">Est. PnL</span>
                 <span className={(() => {
-                  const pnl = calculatePnL(closeConfirmEntry, displayPrice?.price);
+                  const pnl = calculatePnL(closeConfirmEntry, getPrice(closeConfirmEntry.symbol ?? chartSymbol)?.price);
                   if (pnl == null) return "text-slate-400";
                   return pnl >= 0 ? "text-emerald-400" : "text-rose-400";
                 })()}>
-                  {formatCurrency(calculatePnL(closeConfirmEntry, displayPrice?.price))}
+                  {formatCurrency(calculatePnL(closeConfirmEntry, getPrice(closeConfirmEntry.symbol ?? chartSymbol)?.price))}
                 </span>
               </div>
             </div>
@@ -688,7 +825,7 @@ export default function Trade() {
                 type="button"
                 onClick={async () => {
                   if (!closeConfirmEntry) return;
-                  await handleClosePosition(closeConfirmEntry.amount);
+                  await handleClosePosition(closeConfirmEntry.symbol ?? chartSymbol, closeConfirmEntry.amount);
                   setCloseConfirmEntry(null);
                 }}
                 disabled={isClosePending}
@@ -797,7 +934,7 @@ export default function Trade() {
               <div className="text-6xl mb-4">🔐</div>
               <h3 className="text-xl font-semibold text-white mb-2">Connect Wallet</h3>
               <p className="text-slate-400 text-sm mb-6">Connect your wallet to start trading</p>
-              <div className="[&_button]:!bg-gradient-to-r [&_button]:!from-blue-500 [&_button]:!to-blue-600 [&_button]:!px-8 [&_button]:!py-3 [&_button]:!rounded-xl [&_button]:!font-medium [&_button]:!border-0">
+              <div className="[&_button]:!bg-gradient-to-r [&_button]:!from-blue-500 [&_button]:!to-blue-600 [&_button]:!px-8 [&_button]:!py-3 [&_button]:!rounded-xl [&_button]:!font-medium [&_button]:!border-0 flex justify-center">
                 <ConnectButton />
               </div>
             </div>
@@ -825,11 +962,11 @@ export default function Trade() {
                     <span className="block text-[10px] text-slate-500">(zUSDC)</span>
                   </div>
                   <div
-                    className={`text-sm font-semibold ${hasPosition ? (openPositionSide === "Long" ? "text-green-400" : "text-red-400") : "text-slate-500"}`}
+                    className={`text-sm font-semibold ${openPositionMargin > 0 ? (openPositionSide === "Long" ? "text-green-400" : openPositionSide === "Short" ? "text-red-400" : "text-slate-200") : "text-slate-500"}`}
                   >
-                    {hasPosition && openPositionMargin > 0 ? formatZUSDCNumber(openPositionMargin) : "—"}
+                    {openPositionMargin > 0 ? formatZUSDCNumber(openPositionMargin) : "—"}
                   </div>
-                  {hasPosition && openPositionSide !== "N/A" && (
+                  {openPositionMargin > 0 && openPositionSide !== "N/A" && (
                     <div className="text-[11px] text-slate-400">{openPositionSide}</div>
                   )}
                 </div>
@@ -873,7 +1010,7 @@ export default function Trade() {
                   </div>
                   <div className="rounded-xl border border-[#363a59] bg-[#0d0f18] p-4">
                     <p className="text-[10px] uppercase text-slate-500">Liquidation</p>
-                    <p className="text-lg font-semibold text-rose-400">{formatForSymbol(liquidationPrice, chartSymbol)}</p>
+                    <p className="text-lg font-semibold text-rose-400">{formatForSymbol(previewLiquidationPrice, chartSymbol)}</p>
                   </div>
                 <div className="rounded-xl border border-[#363a59] bg-[#0d0f18] p-4">
                   <p className="text-[10px] uppercase text-slate-500">Size</p>
@@ -887,13 +1024,13 @@ export default function Trade() {
                     <p className="text-[10px] uppercase text-slate-500">
                       Take Profit ({targetPercent}%)
                     </p>
-                    <p className="text-lg font-semibold text-emerald-400">{formatForSymbol(takeProfitPrice, chartSymbol)}</p>
+                    <p className="text-lg font-semibold text-emerald-400">{formatForSymbol(previewTakeProfitPrice, chartSymbol)}</p>
                   </div>
                   <div className="rounded-xl border border-[#363a59] bg-[#0d0f18] p-4">
                     <p className="text-[10px] uppercase text-slate-500">
                       Stop Loss ({stopLossPercent}%)
                     </p>
-                    <p className="text-lg font-semibold text-red-400">{formatForSymbol(stopLossPrice, chartSymbol)}</p>
+                    <p className="text-lg font-semibold text-red-400">{formatForSymbol(previewStopLossPrice, chartSymbol)}</p>
                   </div>
                 </div>
                   <div className="mb-4">
@@ -924,50 +1061,64 @@ export default function Trade() {
                       className="w-full h-2 mt-2 accent-red-500"
                     />
                   </div>
-                  <div className="text-xs text-slate-400 mb-3">
-                    Stop Loss Price: {formatForSymbol(stopLossPrice, chartSymbol)}
-                  </div>
-                  {!hasPosition && (
-                    <>
-                      <div className="flex gap-2 mb-4">
-                        <button
-                          onClick={() => setPositionType("Long")}
-                          className={`flex-1 py-3 rounded-xl font-semibold transition ${positionType === "Long" ? "bg-green-500/20 text-green-400 border-2 border-green-500/50" : "bg-[#363a59]/30 text-slate-400 border border-transparent hover:border-[#363a59]"}`}
-                        >
-                          Long
-                        </button>
-                        <button
-                          onClick={() => setPositionType("Short")}
-                          className={`flex-1 py-3 rounded-xl font-semibold transition ${positionType === "Short" ? "bg-red-500/20 text-red-400 border-2 border-red-500/50" : "bg-[#363a59]/30 text-slate-400 border border-transparent hover:border-[#363a59]"}`}
-                        >
-                          Short
-                        </button>
-                      </div>
-                      <div className="mb-4">
-                        <div className="flex items-center justify-between text-sm mb-2">
-                          <div>
-                            <span className="text-slate-400">Leverage</span>
-                            <span className="ml-2 text-[11px] text-slate-500">Max 25x</span>
-                          </div>
-                          <span className="text-slate-400">{leverage}x</span>
+                    <div className="text-xs text-slate-400 mb-3">
+                      Stop Loss Price: {formatForSymbol(previewStopLossPrice, chartSymbol)}
+                    </div>
+                  <div className="mb-4 rounded-2xl border border-[#2c2f45] bg-[#0a0c17] p-4 space-y-4">
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setPositionType("Long")}
+                        className={`flex-1 py-3 rounded-xl font-semibold transition ${
+                          positionType === "Long"
+                            ? "bg-green-500/20 text-green-400 border-2 border-green-500/50"
+                            : "bg-[#363a59]/30 text-slate-400 border border-transparent hover:border-[#363a59]"
+                        }`}
+                        disabled={hasPosition}
+                      >
+                        Long
+                      </button>
+                      <button
+                        onClick={() => setPositionType("Short")}
+                        className={`flex-1 py-3 rounded-xl font-semibold transition ${
+                          positionType === "Short"
+                            ? "bg-red-500/20 text-red-400 border-2 border-red-500/50"
+                            : "bg-[#363a59]/30 text-slate-400 border border-transparent hover:border-[#363a59]"
+                        }`}
+                        disabled={hasPosition}
+                      >
+                        Short
+                      </button>
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between text-sm mb-1">
+                        <div>
+                          <span className="text-slate-400">Leverage</span>
+                          <span className="ml-2 text-[11px] text-slate-500">Max 25x</span>
                         </div>
-                        <input
-                          type="range"
-                          min="1"
-                          max="25"
-                          value={leverage}
-                          onChange={(e) => setLeverage(Number(e.target.value))}
-                          disabled={closeAmount.trim().length > 0}
-                          className="w-full h-2 bg-[#363a59] rounded-lg appearance-none cursor-pointer accent-blue-500 disabled:cursor-not-allowed"
-                        />
-                        {closeAmount.trim().length > 0 && (
-                          <p className="mt-1 text-[11px] text-slate-500">
-                            Leverage locked to current position while close amount is active.
-                          </p>
-                        )}
+                        <span className="text-slate-400">{leverage}x</span>
                       </div>
-                    </>
-                  )}
+                      <input
+                        type="range"
+                        min="1"
+                        max="25"
+                        value={leverage}
+                        onChange={(e) => setLeverage(Number(e.target.value))}
+                        disabled={hasPosition || closeAmount.trim().length > 0}
+                        className="w-full h-2 bg-[#363a59] rounded-lg appearance-none cursor-pointer accent-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                      />
+                      
+                      {hasPosition && (
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          Leverage matches the open position and cannot be changed here.
+                        </p>
+                      )}
+                      {!hasPosition && closeAmount.trim().length > 0 && (
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          Leverage locked to current position while close amount is active.
+                        </p>
+                      )}
+                    </div>
+                  </div>
                   <div className="mb-4">
                     <label className="block text-slate-400 text-sm mb-2">Amount (zUSDC)</label>
                     <input
@@ -980,12 +1131,12 @@ export default function Trade() {
                   </div>
                   <button
                     onClick={hasPosition ? handleIncreasePosition : handleOpenPosition}
-                    disabled={!positionAmount || isOpenPending || isIncreasePending}
+                    disabled={!positionAmount || isOpenPending || isIncreasePending || isSubmittingPosition}
                     className={`w-full py-4 rounded-xl font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed ${
                       positionType === "Long" ? "bg-green-500 hover:bg-green-600 text-white" : "bg-red-500 hover:bg-red-600 text-white"
                     }`}
                   >
-                    {isOpenPending || isIncreasePending ? "Processing..." : hasPosition ? "Increase Position" : `Open ${positionType}`}
+                    {isSubmittingPosition ? "Processing..." : hasPosition ? "Increase Position" : `Open ${positionType}`}
                   </button>
 
                   {hasPosition && (
@@ -1001,7 +1152,7 @@ export default function Trade() {
                         />
                       </div>
                       <button
-                        onClick={() => handleClosePosition()}
+                        onClick={() => handleClosePosition(chartSymbol)}
                         disabled={!closeAmount || isClosePending}
                         className="w-full py-3 rounded-xl font-semibold bg-gradient-to-r from-rose-500 via-rose-600 to-rose-700 text-white shadow-lg shadow-rose-900/40 transition hover:from-rose-400 hover:via-rose-500 hover:to-rose-600 hover:shadow-2xl disabled:opacity-50"
                       >

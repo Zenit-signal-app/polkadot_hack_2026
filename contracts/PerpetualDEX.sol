@@ -23,8 +23,8 @@ contract PerpetualDEX is IPerpDEX, IPosition, Ownable, ReentrancyGuard {
 
     // Holds the user balances
     mapping(address => uint256) public balances;
-    // Holds the user positions
-    mapping(address => Position) public positions;
+    // Holds the user positions per market: user => market (bytes32) => Position
+    mapping(address => mapping(bytes32 => Position)) public positions;
 
     constructor(
         address tokenAddress, // Address of the trading token
@@ -65,6 +65,7 @@ contract PerpetualDEX is IPerpDEX, IPosition, Ownable, ReentrancyGuard {
      * @inheritdoc IPosition
      */
     function openPosition(
+        bytes32 _market,
         uint256 _amount,
         PositionType _positionType,
         uint8 _leverage
@@ -72,35 +73,35 @@ contract PerpetualDEX is IPerpDEX, IPosition, Ownable, ReentrancyGuard {
         require(balances[msg.sender] >= _amount, "Insufficient balance");
         require(_leverage > 0, "Leverage must be greater than 0");
         require(_amount > 0, "Amount must be greater than 0");
-        require(positions[msg.sender].amount == 0, "Position already open");
+        require(positions[msg.sender][_market].amount == 0, "Position already open for this market");
 
-        _openPosition(_amount, _positionType, _leverage);
+        _openPosition(_market, _amount, _positionType, _leverage);
     }
 
     /**
      * @inheritdoc IPosition
      */
-    function increasePosition(uint256 _amount) external override {
-        Position storage position = positions[msg.sender];
+    function increasePosition(bytes32 _market, uint256 _amount) external override {
+        Position storage position = positions[msg.sender][_market];
 
-        require(position.amount > 0, "No position open");
+        require(position.amount > 0, "No position open for this market");
         require(_amount > 0, "Amount must be greater than 0");
         require(balances[msg.sender] >= _amount, "Insufficient balance");
 
-        _increasePosition(_amount, position);
+        _increasePosition(_market, _amount, position);
     }
 
     /**
      * @inheritdoc IPosition
      */
-    function closePosition(uint256 _amount) external override {
-        Position storage position = positions[msg.sender];
+    function closePosition(bytes32 _market, uint256 _amount) external override {
+        Position storage position = positions[msg.sender][_market];
 
-        require(position.amount > 0, "No position open");
+        require(position.amount > 0, "No position open for this market");
         require(_amount > 0, "Amount must be greater than 0");
         require(position.amount >= _amount, "Insufficient balance");
 
-        _decreasePosition(_amount, position);
+        _decreasePosition(_market, _amount, position);
     }
 
     /**
@@ -135,13 +136,15 @@ contract PerpetualDEX is IPerpDEX, IPosition, Ownable, ReentrancyGuard {
      * @inheritdoc IPosition
      */
     function getCurrentPosition(
-        address user
+        address user,
+        bytes32 market
     ) external view override returns (Position memory) {
-        return positions[user];
+        return positions[user][market];
     }
 
     /**
      * @dev Opens a trading position for the caller. The function is private and can only be called within the contract.
+     * @param _market The market symbol.
      * @param _amount The amount for the new position.
      * @param _position The type of the position (Long/Short).
      * @param _leverage The leverage for the new position.
@@ -149,27 +152,30 @@ contract PerpetualDEX is IPerpDEX, IPosition, Ownable, ReentrancyGuard {
      * updates the reward based on the leveraged amount, and emits a PositionOpened event.
      */
     function _openPosition(
+        bytes32 _market,
         uint256 _amount,
         PositionType _position,
         uint8 _leverage
     ) private {
         balances[msg.sender] -= _amount;
 
-        positions[msg.sender] = Position(_amount, _position, _leverage);
+        positions[msg.sender][_market] = Position(_amount, _position, _leverage);
 
         _setReward(_amount * _leverage);
 
-        emit PositionOpened(msg.sender, _amount, _position, _leverage);
+        emit PositionOpened(msg.sender, _market, _amount, _position, _leverage);
     }
 
     /**
      * @dev Increases an existing trading position for the caller. The function is private and can only be called within the contract.
+     * @param _market The market symbol.
      * @param _amount The additional amount to increase the position by.
      * @param position The storage reference to the caller's current position.
      * Deducts the additional amount from the caller's balance, updates the position amount,
      * updates the reward based on the leveraged amount, and emits a PositionIncreased event.
      */
     function _increasePosition(
+        bytes32 _market,
         uint256 _amount,
         Position storage position
     ) private {
@@ -179,31 +185,33 @@ contract PerpetualDEX is IPerpDEX, IPosition, Ownable, ReentrancyGuard {
 
         _setReward(_amount * position.leverage);
 
-        emit PositionIncreased(msg.sender, _amount);
+        emit PositionIncreased(msg.sender, _market, _amount);
     }
 
     /**
      * @dev Decreases an existing trading position for the caller. The function is private and can only be called within the contract.
+     * @param _market The market symbol.
      * @param _amount The amount by which the position should be decreased.
      * @param position The storage reference to the caller's current position.
      * Updates the reward based on the leveraged amount, adjusts the position amount or deletes it if the entire position is closed,
      * credits the amount back to the caller's balance, and emits a PositionClosed event.
      */
     function _decreasePosition(
+        bytes32 _market,
         uint256 _amount,
         Position storage position
     ) private {
         _setReward(_amount * position.leverage);
 
         if (position.amount == _amount) {
-            delete positions[msg.sender];
+            delete positions[msg.sender][_market];
         } else {
             position.amount -= _amount;
         }
 
         balances[msg.sender] += _amount;
 
-        emit PositionClosed(msg.sender, _amount);
+        emit PositionClosed(msg.sender, _market, _amount);
     }
 
     /**

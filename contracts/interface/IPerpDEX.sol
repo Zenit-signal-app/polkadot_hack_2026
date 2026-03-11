@@ -28,12 +28,14 @@ interface IPosition {
     /**
      * Emitted when a position is opened.
      * @param user The address of the user.
+     * @param market The market symbol (bytes32, e.g. "BTCUSD").
      * @param amount The amount involved in the position.
      * @param position The type of the opened position.
      * @param leverage The leverage applied to the position.
      */
     event PositionOpened(
         address indexed user,
+        bytes32 indexed market,
         uint256 amount,
         PositionType position,
         uint8 leverage
@@ -42,24 +44,28 @@ interface IPosition {
     /**
      * Emitted when a position is increased.
      * @param user The address of the user.
+     * @param market The market symbol.
      * @param amount The additional amount added to the position.
      */
-    event PositionIncreased(address indexed user, uint256 amount);
+    event PositionIncreased(address indexed user, bytes32 indexed market, uint256 amount);
 
     /**
      * Emitted when a position is closed.
      * @param user The address of the user.
+     * @param market The market symbol.
      * @param amount The amount of the position being closed.
      */
-    event PositionClosed(address indexed user, uint256 amount);
+    event PositionClosed(address indexed user, bytes32 indexed market, uint256 amount);
 
     /**
-     * Opens a new trading position.
+     * Opens a new trading position for a market.
+     * @param _market The market symbol (bytes32, e.g. "BTCUSD").
      * @param _amount The amount for the new position.
      * @param _position The type of the position (Long/Short).
      * @param _leverage The leverage for the new position.
      */
     function openPosition(
+        bytes32 _market,
         uint256 _amount,
         PositionType _position,
         uint8 _leverage
@@ -67,23 +73,27 @@ interface IPosition {
 
     /**
      * Increases an existing trading position.
+     * @param _market The market symbol.
      * @param _amount The additional amount to increase the position by.
      */
-    function increasePosition(uint256 _amount) external;
+    function increasePosition(bytes32 _market, uint256 _amount) external;
 
     /**
      * Closes an existing trading position.
+     * @param _market The market symbol.
      * @param _amount The amount of the position to be closed.
      */
-    function closePosition(uint256 _amount) external;
+    function closePosition(bytes32 _market, uint256 _amount) external;
 
     /**
-     * Retrieves the current position for a specified user.
+     * Retrieves the current position for a specified user and market.
      * @param user The address of the user.
-     * @return Position The current position of the user.
+     * @param market The market symbol.
+     * @return Position The current position of the user for that market.
      */
     function getCurrentPosition(
-        address user
+        address user,
+        bytes32 market
     ) external view returns (Position memory);
 }
 

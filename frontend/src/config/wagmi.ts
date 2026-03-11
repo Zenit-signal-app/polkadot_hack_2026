@@ -4,8 +4,8 @@ import { defineChain } from "viem";
 
 export const polkadotEVMTestnet = defineChain({
   id: 420420417,
-  name: "Polkadot EVM Testnet",
-  nativeCurrency: { name: "DOT", symbol: "DOT", decimals: 18 },
+  name: "Polkadot Hub TestNet",
+  nativeCurrency: { name: "PAS", symbol: "PAS", decimals: 10 },
   rpcUrls: {
     default: { http: ["https://eth-rpc-testnet.polkadot.io/"] },
   },

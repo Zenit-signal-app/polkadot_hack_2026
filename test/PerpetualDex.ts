@@ -1,6 +1,10 @@
 import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { expect } from "chai";
 import { ethers } from "hardhat";
+
+const MARKET_BTC = ethers.encodeBytes32String("BTCUSD");
+const MARKET_ETH = ethers.encodeBytes32String("ETHUSD");
+const MARKET_DOT = ethers.encodeBytes32String("DOTUSD");
 import { formatPosition } from "../test-helpers/format-position";
 import { PositionType, FixtureData } from "../test-helpers/models";
 
@@ -242,7 +246,7 @@ describe("PerpetualDex", function () {
       await depositTx.wait();
 
       await expect(
-        dex.connect(traderOne).openPosition(amount, positionType, leverage)
+        dex.connect(traderOne).openPosition(MARKET_BTC, amount, positionType, leverage)
       ).to.be.revertedWith("Amount must be greater than 0");
     });
 
@@ -257,7 +261,7 @@ describe("PerpetualDex", function () {
       await depositTx.wait();
 
       await expect(
-        dex.connect(traderOne).openPosition(amount, positionType, leverage)
+        dex.connect(traderOne).openPosition(MARKET_BTC, amount, positionType, leverage)
       ).to.be.revertedWith("Leverage must be greater than 0");
     });
 
@@ -272,7 +276,7 @@ describe("PerpetualDex", function () {
       await depositTx.wait();
 
       await expect(
-        dex.connect(traderOne).openPosition(amount, positionType, leverage)
+        dex.connect(traderOne).openPosition(MARKET_BTC, amount, positionType, leverage)
       ).to.be.revertedWith("Insufficient balance");
     });
 
@@ -287,7 +291,7 @@ describe("PerpetualDex", function () {
       await depositTx.wait();
 
       await expect(
-        dex.connect(traderOne).openPosition(amount, positionType, leverage)
+        dex.connect(traderOne).openPosition(MARKET_BTC, amount, positionType, leverage)
       ).to.be.revertedWithoutReason();
     });
 
@@ -303,12 +307,12 @@ describe("PerpetualDex", function () {
 
       const tx = await dex
         .connect(traderOne)
-        .openPosition(amount, positionType, leverage);
+        .openPosition(MARKET_BTC, amount, positionType, leverage);
       await tx.wait();
 
       expect(await dex.balanceOf(traderOne.address)).to.equal(0);
 
-      const position = await dex.getCurrentPosition(traderOne.address);
+      const position = await dex.getCurrentPosition(traderOne.address, MARKET_BTC);
 
       expect(position[0]).to.equal(amount);
       expect(position[1]).to.equal(positionType);
@@ -327,12 +331,12 @@ describe("PerpetualDex", function () {
 
       const tx = await dex
         .connect(traderOne)
-        .openPosition(amount, positionType, leverage);
+        .openPosition(MARKET_BTC, amount, positionType, leverage);
       await tx.wait();
 
       expect(await dex.balanceOf(traderOne.address)).to.equal(0);
 
-      const position = await dex.getCurrentPosition(traderOne.address);
+      const position = await dex.getCurrentPosition(traderOne.address, MARKET_BTC);
 
       expect(position[0]).to.equal(amount);
       expect(position[1]).to.equal(positionType);
@@ -350,10 +354,10 @@ describe("PerpetualDex", function () {
       await depositTx.wait();
 
       await expect(
-        dex.connect(traderOne).openPosition(amount, positionType, leverage)
+        dex.connect(traderOne).openPosition(MARKET_BTC, amount, positionType, leverage)
       )
         .to.emit(dex, "PositionOpened")
-        .withArgs(traderOne.address, amount, positionType, leverage);
+        .withArgs(traderOne.address, MARKET_BTC, amount, positionType, leverage);
     });
 
     it("Should revert if trader has an open position", async function () {
@@ -368,12 +372,12 @@ describe("PerpetualDex", function () {
 
       const tx = await dex
         .connect(traderOne)
-        .openPosition(amount / 2, positionType, leverage);
+        .openPosition(MARKET_BTC, amount / 2, positionType, leverage);
       await tx.wait();
 
       await expect(
-        dex.connect(traderOne).openPosition(amount / 2, positionType, leverage)
-      ).to.be.revertedWith("Position already open");
+        dex.connect(traderOne).openPosition(MARKET_BTC, amount / 2, positionType, leverage)
+      ).to.be.revertedWith("Position already open for this market");
     });
   });
 
@@ -395,7 +399,7 @@ describe("PerpetualDex", function () {
 
       const tx = await dex
         .connect(traderOne)
-        .openPosition(positionAmount, positionType, leverage);
+        .openPosition(MARKET_BTC, positionAmount, positionType, leverage);
       await tx.wait();
     });
 
@@ -403,7 +407,7 @@ describe("PerpetualDex", function () {
       const { dex, traderOne } = fixtureData;
 
       await expect(
-        dex.connect(traderOne).increasePosition(0)
+        dex.connect(traderOne).increasePosition(MARKET_BTC, 0)
       ).to.be.revertedWith("Amount must be greater than 0");
     });
 
@@ -413,7 +417,7 @@ describe("PerpetualDex", function () {
       const amount = 2500;
 
       await expect(
-        dex.connect(traderOne).increasePosition(amount)
+        dex.connect(traderOne).increasePosition(MARKET_BTC, amount)
       ).to.be.revertedWith("Insufficient balance");
     });
 
@@ -424,7 +428,7 @@ describe("PerpetualDex", function () {
 
       const increaseTx = await dex
         .connect(traderOne)
-        .increasePosition(increaseAmount);
+        .increasePosition(MARKET_BTC, increaseAmount);
       await increaseTx.wait();
 
       const traderOneAddress = await traderOne.getAddress();
@@ -436,7 +440,7 @@ describe("PerpetualDex", function () {
         expectedDepositedAmount
       );
 
-      const position = await dex.getCurrentPosition(traderOneAddress);
+      const position = await dex.getCurrentPosition(traderOneAddress, MARKET_BTC);
 
       expect(position[0]).to.equal(positionAmount + increaseAmount);
       expect(position[1]).to.equal(positionType);
@@ -456,21 +460,21 @@ describe("PerpetualDex", function () {
 
       const tx = await dex
         .connect(traderOne)
-        .openPosition(amount, positionType, leverage);
+        .openPosition(MARKET_BTC, amount, positionType, leverage);
       await tx.wait();
 
       const increaseAmount = 500;
 
       const increaseTx = await dex
         .connect(traderOne)
-        .increasePosition(increaseAmount);
+        .increasePosition(MARKET_BTC, increaseAmount);
       await increaseTx.wait();
 
       expect(await dex.balanceOf(traderOne.address)).to.equal(
         depositAmount - amount - increaseAmount
       );
 
-      const position = await dex.getCurrentPosition(traderOne.address);
+      const position = await dex.getCurrentPosition(traderOne.address, MARKET_BTC);
 
       expect(position[0]).to.equal(amount + increaseAmount);
       expect(position[1]).to.equal(positionType);
@@ -484,9 +488,9 @@ describe("PerpetualDex", function () {
 
       const traderOneAddress = await traderOne.getAddress();
 
-      await expect(dex.connect(traderOne).increasePosition(increaseAmount))
+      await expect(dex.connect(traderOne).increasePosition(MARKET_BTC, increaseAmount))
         .to.emit(dex, "PositionIncreased")
-        .withArgs(traderOneAddress, increaseAmount);
+        .withArgs(traderOneAddress, MARKET_BTC, increaseAmount);
     });
   });
 
@@ -508,14 +512,14 @@ describe("PerpetualDex", function () {
 
       const tx = await dex
         .connect(traderOne)
-        .openPosition(positionAmount, positionType, leverage);
+        .openPosition(MARKET_BTC, positionAmount, positionType, leverage);
       await tx.wait();
     });
 
     it("Should revert if close amount is 0", async function () {
       const { dex, traderOne } = fixtureData;
 
-      await expect(dex.connect(traderOne).closePosition(0)).to.be.revertedWith(
+      await expect(dex.connect(traderOne).closePosition(MARKET_BTC, 0)).to.be.revertedWith(
         "Amount must be greater than 0"
       );
     });
@@ -524,15 +528,15 @@ describe("PerpetualDex", function () {
       const { dex, traderTwo } = fixtureData;
 
       await expect(
-        dex.connect(traderTwo).closePosition(1000)
-      ).to.be.revertedWith("No position open");
+        dex.connect(traderTwo).closePosition(MARKET_BTC, 1000)
+      ).to.be.revertedWith("No position open for this market");
     });
 
     it("Should revert if close amount is greater than position amount", async function () {
       const { dex, traderOne } = fixtureData;
 
       await expect(
-        dex.connect(traderOne).closePosition(positionAmount + 1000)
+        dex.connect(traderOne).closePosition(MARKET_BTC, positionAmount + 1000)
       ).to.be.revertedWith("Insufficient balance");
     });
 
@@ -542,10 +546,10 @@ describe("PerpetualDex", function () {
       const closeAmount = positionAmount;
       const traderOneAddress = await traderOne.getAddress();
 
-      const closeTx = await dex.connect(traderOne).closePosition(closeAmount);
+      const closeTx = await dex.connect(traderOne).closePosition(MARKET_BTC, closeAmount);
       await closeTx.wait();
 
-      const position = await dex.getCurrentPosition(traderOneAddress);
+      const position = await dex.getCurrentPosition(traderOneAddress, MARKET_BTC);
 
       expect(position[0]).to.equal(0);
     });
@@ -558,10 +562,10 @@ describe("PerpetualDex", function () {
 
       const initialBalance = await dex.balanceOf(traderOneAddress);
 
-      const closeTx = await dex.connect(traderOne).closePosition(closeAmount);
+      const closeTx = await dex.connect(traderOne).closePosition(MARKET_BTC, closeAmount);
       await closeTx.wait();
 
-      const currentPosition = await dex.getCurrentPosition(traderOneAddress);
+      const currentPosition = await dex.getCurrentPosition(traderOneAddress, MARKET_BTC);
 
       const formattedCurrentPosition = formatPosition(
         currentPosition[0],
@@ -578,6 +582,97 @@ describe("PerpetualDex", function () {
       );
       expect(formattedCurrentPosition.position).to.equal(positionType);
       expect(formattedCurrentPosition.leverage).to.equal(leverage);
+    });
+  });
+
+  describe("Multi-market positions", function () {
+    it("Should allow opening positions on BTC, ETH, DOT in parallel", async function () {
+      const { dex, traderOne } = await loadFixture(deployPerpetualDexFixture);
+
+      const depositAmount = ethers.parseEther("10000");
+      const depositTx = await dex.connect(traderOne).deposit(depositAmount);
+      await depositTx.wait();
+
+      const btcAmount = 1000;
+      const ethAmount = 500;
+      const dotAmount = 300;
+
+      await dex
+        .connect(traderOne)
+        .openPosition(MARKET_BTC, btcAmount, PositionType.Long, 5);
+      await dex
+        .connect(traderOne)
+        .openPosition(MARKET_ETH, ethAmount, PositionType.Short, 10);
+      await dex
+        .connect(traderOne)
+        .openPosition(MARKET_DOT, dotAmount, PositionType.Long, 3);
+
+      const posBtc = await dex.getCurrentPosition(traderOne.address, MARKET_BTC);
+      const posEth = await dex.getCurrentPosition(traderOne.address, MARKET_ETH);
+      const posDot = await dex.getCurrentPosition(traderOne.address, MARKET_DOT);
+
+      expect(posBtc[0]).to.equal(btcAmount);
+      expect(posBtc[1]).to.equal(PositionType.Long);
+      expect(posBtc[2]).to.equal(5);
+
+      expect(posEth[0]).to.equal(ethAmount);
+      expect(posEth[1]).to.equal(PositionType.Short);
+      expect(posEth[2]).to.equal(10);
+
+      expect(posDot[0]).to.equal(dotAmount);
+      expect(posDot[1]).to.equal(PositionType.Long);
+      expect(posDot[2]).to.equal(3);
+
+      const expectedBalance = depositAmount - BigInt(btcAmount) - BigInt(ethAmount) - BigInt(dotAmount);
+      expect(await dex.balanceOf(traderOne.address)).to.equal(expectedBalance);
+    });
+
+    it("Should increase position on one market without affecting others", async function () {
+      const { dex, traderOne } = await loadFixture(deployPerpetualDexFixture);
+
+      const depositAmount = 5000;
+      await dex.connect(traderOne).deposit(depositAmount);
+      await dex.connect(traderOne).openPosition(MARKET_BTC, 1000, PositionType.Long, 5);
+      await dex.connect(traderOne).openPosition(MARKET_ETH, 500, PositionType.Short, 10);
+
+      await dex.connect(traderOne).increasePosition(MARKET_ETH, 200);
+
+      const posBtc = await dex.getCurrentPosition(traderOne.address, MARKET_BTC);
+      const posEth = await dex.getCurrentPosition(traderOne.address, MARKET_ETH);
+
+      expect(posBtc[0]).to.equal(1000);
+      expect(posEth[0]).to.equal(700);
+    });
+
+    it("Should close position on one market without affecting others", async function () {
+      const { dex, traderOne } = await loadFixture(deployPerpetualDexFixture);
+
+      const depositAmount = 5000;
+      await dex.connect(traderOne).deposit(depositAmount);
+      await dex.connect(traderOne).openPosition(MARKET_BTC, 1000, PositionType.Long, 5);
+      await dex.connect(traderOne).openPosition(MARKET_ETH, 500, PositionType.Short, 10);
+
+      await dex.connect(traderOne).closePosition(MARKET_BTC, 1000);
+
+      const posBtc = await dex.getCurrentPosition(traderOne.address, MARKET_BTC);
+      const posEth = await dex.getCurrentPosition(traderOne.address, MARKET_ETH);
+
+      expect(posBtc[0]).to.equal(0);
+      expect(posEth[0]).to.equal(500);
+
+      expect(await dex.balanceOf(traderOne.address)).to.equal(4500);
+    });
+
+    it("Should revert when opening second position on same market", async function () {
+      const { dex, traderOne } = await loadFixture(deployPerpetualDexFixture);
+
+      await dex.connect(traderOne).deposit(5000);
+      await dex.connect(traderOne).openPosition(MARKET_BTC, 1000, PositionType.Long, 5);
+      await dex.connect(traderOne).openPosition(MARKET_ETH, 500, PositionType.Short, 10);
+
+      await expect(
+        dex.connect(traderOne).openPosition(MARKET_BTC, 500, PositionType.Short, 3)
+      ).to.be.revertedWith("Position already open for this market");
     });
   });
 });
