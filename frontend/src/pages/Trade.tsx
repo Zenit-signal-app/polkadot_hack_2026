@@ -637,10 +637,10 @@ export default function Trade() {
       if (price == null || Number.isNaN(price) || !Number.isFinite(price)) return;
       lines.push({ name, price, color, lineStyle, labelAlign, lineWidth });
     };
-    addLine("Entry Price", effectiveEntryPrice, "#ffffff", 0, "top", 2);
-    addLine("Liquidation", previewLiquidationPrice, "#ef4444", 1, "bottom", 2);
-    addLine("Take Profit", previewTakeProfitPrice, "#22c55e", 1, "top", 2);
-    addLine("Stop Loss", previewStopLossPrice, "#eab308", 1, "bottom", 2);
+    addLine("Entry Price", effectiveEntryPrice, "#ffffff", 0, "top", 1);
+    addLine("Liquidation", previewLiquidationPrice, "#ef4444", 1, "bottom", 1);
+    addLine("Take Profit", previewTakeProfitPrice, "#22c55e", 1, "top", 1);
+    addLine("Stop Loss", previewStopLossPrice, "#eab308", 1, "bottom", 1);
     return lines.length > 0 ? lines : undefined;
   }, [
     hasPosition,
@@ -911,7 +911,7 @@ export default function Trade() {
       {/* Chart + Trade Panel */}
       <div className="grid lg:grid-cols-[1fr_400px] gap-6">
         {/* Chart Section */}
-        <div className="lg:order-1">
+        <div className="lg:order-1 min-w-0">
           <div className="bg-[#0d0f18] rounded-2xl border border-[#363a59]/50 overflow-hidden shadow-xl shadow-black/20">
             <div className="flex flex-col gap-3 border-b border-[#1d1f31] px-6 py-4 text-sm text-white lg:flex-row lg:items-center lg:justify-between">
               <div>
@@ -963,7 +963,7 @@ export default function Trade() {
         </div>
 
         {/* Trade Panel */}
-        <div className="lg:order-2 space-y-4">
+        <div className="lg:order-2 space-y-4 min-w-0">
           {notConnected ? (
             <div className="bg-gradient-to-br from-[#1e2033] to-[#16182e] rounded-2xl border border-[#363a59] p-12 text-center">
               <div className="text-6xl mb-4">🔐</div>

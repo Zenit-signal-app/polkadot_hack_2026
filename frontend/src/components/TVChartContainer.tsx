@@ -310,19 +310,14 @@ export default function TVChartContainer({
 
     const useDrawingsApi = async () => {
       const now = Math.floor(Date.now() / 1000);
-      const from = now - 365 * 24 * 3600;
-      const to = now + 24 * 3600;
       for (const level of tpoLevels) {
         try {
           tpoLineRefs.current[level.name]?.remove?.();
           if (tpoLineRefs.current[level.name]?.entityId != null && typeof chart.removeEntity === "function") {
             chart.removeEntity(tpoLineRefs.current[level.name].entityId);
           }
-          const entityId = await chart.createMultipointShape?.(
-            [
-              { time: from, price: level.price },
-              { time: to, price: level.price },
-            ],
+          const entityId = await chart.createShape?.(
+            { time: now, price: level.price },
             {
               shape: "horizontal_line",
               text: level.name,
@@ -330,13 +325,13 @@ export default function TVChartContainer({
               disableSelection: true,
               disableSave: true,
               disableUndo: true,
-            overrides: {
-                "linetoolhorzline.linecolor": level.color,
-                "linetoolhorzline.linewidth": level.lineWidth ?? 2,
-                "linetoolhorzline.linestyle": level.lineStyle ?? 0,
-                "linetoolhorzline.showPrice": true,
-                "linetoolhorzline.textcolor": level.color,
-                "linetoolhorzline.vertLabelsAlign": level.labelAlign ?? "top",
+              overrides: {
+                linecolor: level.color,
+                linewidth: level.lineWidth ?? 2,
+                linestyle: level.lineStyle ?? 0,
+                showPrice: true,
+                textcolor: level.color,
+                vertLabelsAlign: level.labelAlign ?? "top",
               },
             }
           );
@@ -369,7 +364,11 @@ export default function TVChartContainer({
           <p className="text-xs text-slate-500">Nếu không hiển thị, kiểm tra /charting_library/ và /datafeeds/</p>
         </div>
       )}
-      <div ref={containerRef} className="w-full h-[500px]" style={{ visibility: libsReady ? "visible" : "hidden" }} />
+      <div
+        ref={containerRef}
+        className="w-full h-[500px]"
+        style={{ visibility: libsReady ? "visible" : "hidden", maxWidth: "100%" }}
+      />
     </div>
   );
 }
