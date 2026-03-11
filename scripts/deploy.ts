@@ -1,41 +1,37 @@
 import { ethers } from "hardhat";
 
+const ZUSDC_ADDRESS = process.env.zUSDC_Smartcontract || process.env.ZUSDC_ADDRESS || "0x277E42B9454fB36A7Eaa52D4cE332bEF71dd017a";
+
 async function main() {
-  const token = await ethers.deployContract("Token");
-  await token.waitForDeployment();
+  const zusdc = ZUSDC_ADDRESS;
+  if (!zusdc) {
+    throw new Error("ZUSDC_ADDRESS or zUSDC_Smartcontract required in .env");
+  }
 
-  const rewardToken = await ethers.deployContract("RewardToken");
-  await rewardToken.waitForDeployment();
+  console.log("Using zUSDC at:", zusdc);
 
-  const tokenAddress = await token.getAddress();
-  const rewardTokenAddress = await rewardToken.getAddress();
+  const RewardContract = await ethers.getContractFactory("RewardContract");
+  const reward = await RewardContract.deploy(zusdc);
+  await reward.waitForDeployment();
+  const rewardAddress = await reward.getAddress();
+  console.log("RewardContract deployed to:", rewardAddress);
 
-  const rewardContract = await ethers.deployContract("RewardContract", [
-    rewardTokenAddress,
-  ]);
-  await rewardContract.waitForDeployment();
-
-  const rewardContractAddress = await rewardContract.getAddress();
-
-  const dex = await ethers.deployContract("PerpetualDEX", [
-    tokenAddress,
-    rewardContractAddress,
-  ]);
+  const PerpetualDEX = await ethers.getContractFactory("PerpetualDEX");
+  const dex = await PerpetualDEX.deploy(zusdc, rewardAddress);
   await dex.waitForDeployment();
-
   const dexAddress = await dex.getAddress();
+  console.log("PerpetualDEX deployed to:", dexAddress);
 
-  const tx = await rewardContract.setDEXContractAddress(dexAddress);
+  const tx = await reward.setDEXContractAddress(dexAddress);
   await tx.wait();
+  console.log("RewardContract.setDEXContractAddress called");
 
-  console.log("Token address: ", tokenAddress);
-  console.log("Reward token address: ", rewardTokenAddress);
-  console.log("DEX address: ", dexAddress);
-  console.log("Reward contract address: ", rewardContractAddress);
+  console.log("\n--- Add to frontend/.env ---");
+  console.log(`VITE_DEX_ADDRESS=${dexAddress}`);
+  console.log(`VITE_TOKEN_ADDRESS=${zusdc}`);
+  console.log(`VITE_REWARD_ADDRESS=${rewardAddress}`);
 }
 
-// We recommend this pattern to be able to use async/await everywhere
-// and properly handle errors.
 main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
