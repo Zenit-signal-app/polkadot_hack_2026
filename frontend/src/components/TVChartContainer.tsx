@@ -60,7 +60,7 @@ export default function TVChartContainer({
   const timeScaleSizeObserverRef = useRef<{ timeScale: any; handler: () => void } | null>(null);
   const timeScaleRangeObserverRef = useRef<{ timeScale: any; handler: (range: { from: number; to: number } | null) => void } | null>(null);
   const [chartReady, setChartReady] = useState(false);
-  const tpoLineRefs = useRef<Record<string, { remove?: () => void }>>({});
+  const tpoLineRefs = useRef<Record<string, { remove?: () => void; entityId?: unknown }>>({});
 
   useEffect(() => {
     const container = containerRef.current;
@@ -235,46 +235,116 @@ export default function TVChartContainer({
 
   useEffect(() => {
     if (!chartReady) {
-      Object.values(tpoLineRefs.current).forEach((line) => line.remove?.());
-      tpoLineRefs.current = {};
+      removeAllTpoLines();
       return;
     }
     const chart = chartRef.current;
     if (!chart || !tpoLevels?.length) {
-      Object.values(tpoLineRefs.current).forEach((line) => line.remove?.());
-      tpoLineRefs.current = {};
+      removeAllTpoLines();
       return;
     }
-    try {
-      const priceScale = chart.priceScale("right");
-      const createPriceLine = priceScale?.createPriceLine;
-      if (typeof createPriceLine !== "function") return;
-      const keepNames = new Set(tpoLevels.map((level) => level.name));
+
+    function removeAllTpoLines() {
+      const ch = chartRef.current;
       Object.entries(tpoLineRefs.current).forEach(([name, line]) => {
-        if (!keepNames.has(name)) {
-          line.remove?.();
-          delete tpoLineRefs.current[name];
+        if (line.remove) line.remove();
+        else if (line.entityId != null && typeof ch?.removeEntity === "function") {
+          try {
+            ch.removeEntity(line.entityId);
+          } catch {
+            // ignore
+          }
         }
+        delete tpoLineRefs.current[name];
       });
-      tpoLevels.forEach((level) => {
-        tpoLineRefs.current[level.name]?.remove?.();
-        tpoLineRefs.current[level.name] = createPriceLine({
-          price: level.price,
-          color: level.color,
-          lineStyle: 0,
-          lineWidth: level.lineWidth ?? 2,
-          axisLabelVisible: true,
-          title: level.name,
-          titleColor: level.color,
-          titleBackgroundColor: "#121421",
-        });
-      });
-    } catch {
-      // ignore
     }
+
+    const keepNames = new Set(tpoLevels.map((l) => l.name));
+    Object.entries(tpoLineRefs.current).forEach(([name, line]) => {
+      if (!keepNames.has(name)) {
+        if (line.remove) line.remove();
+        else if (line.entityId != null && typeof chart.removeEntity === "function") {
+          try {
+            chart.removeEntity(line.entityId);
+          } catch {
+            // ignore
+          }
+        }
+        delete tpoLineRefs.current[name];
+      }
+    });
+
+    const useSeriesApi = () => {
+      try {
+        const series = chart.getSeries?.();
+        const createPriceLine = series?.createPriceLine;
+        if (typeof createPriceLine !== "function") return false;
+        tpoLevels.forEach((level) => {
+          tpoLineRefs.current[level.name]?.remove?.();
+          tpoLineRefs.current[level.name] = {
+            remove: createPriceLine({
+              price: level.price,
+              color: level.color,
+              lineStyle: 0,
+              lineWidth: level.lineWidth ?? 2,
+              axisLabelVisible: true,
+              title: level.name,
+              titleColor: level.color,
+              titleBackgroundColor: "#121421",
+            })?.remove,
+          };
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const useDrawingsApi = async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const from = now - 365 * 24 * 3600;
+      const to = now + 24 * 3600;
+      for (const level of tpoLevels) {
+        try {
+          tpoLineRefs.current[level.name]?.remove?.();
+          if (tpoLineRefs.current[level.name]?.entityId != null && typeof chart.removeEntity === "function") {
+            chart.removeEntity(tpoLineRefs.current[level.name].entityId);
+          }
+          const entityId = await chart.createMultipointShape?.(
+            [
+              { time: from, price: level.price },
+              { time: to, price: level.price },
+            ],
+            {
+              shape: "horizontal_line",
+              text: level.name,
+              lock: true,
+              disableSelection: true,
+              disableSave: true,
+              disableUndo: true,
+              overrides: {
+                "linetoolhorzline.linecolor": level.color,
+                "linetoolhorzline.linewidth": level.lineWidth ?? 2,
+                "linetoolhorzline.showPrice": true,
+                "linetoolhorzline.textcolor": level.color,
+              },
+            }
+          );
+          if (entityId != null) {
+            tpoLineRefs.current[level.name] = { entityId };
+          }
+        } catch {
+          // ignore
+        }
+      }
+    };
+
+    if (!useSeriesApi()) {
+      useDrawingsApi();
+    }
+
     return () => {
-      Object.values(tpoLineRefs.current).forEach((line) => line.remove?.());
-      tpoLineRefs.current = {};
+      removeAllTpoLines();
     };
   }, [chartReady, tpoLevels]);
 

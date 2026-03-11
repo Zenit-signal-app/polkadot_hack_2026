@@ -623,10 +623,10 @@ export default function Trade() {
       if (price == null || Number.isNaN(price) || !Number.isFinite(price)) return;
       lines.push({ name, price, color, lineWidth });
     };
-    addLine("Entry Price", effectiveEntryPrice, "#facc15", 2);
-    addLine("Liquidation", previewLiquidationPrice, "#fb7185", 2);
-    addLine("Take Profit", previewTakeProfitPrice, "#34d399", 2);
-    addLine("Stop Loss", previewStopLossPrice, "#f87171", 2);
+    addLine("Entry Price", effectiveEntryPrice, "#ffffff", 2);
+    addLine("Liquidation", previewLiquidationPrice, "#ef4444", 2);
+    addLine("Take Profit", previewTakeProfitPrice, "#22c55e", 2);
+    addLine("Stop Loss", previewStopLossPrice, "#eab308", 2);
     return lines.length > 0 ? lines : undefined;
   }, [
     hasPosition,
