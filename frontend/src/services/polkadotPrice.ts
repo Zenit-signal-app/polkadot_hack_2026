@@ -253,20 +253,32 @@ function toPythResolution(opts: BenchmarkHistoryOptions): string {
 
 const PYTH_MAX_RANGE_SECONDS = 360 * 86400;
 
+function resolutionToSeconds(resolution: string): number {
+  const r = String(resolution).toUpperCase();
+  if (r === "1D" || r === "D") return 86400;
+  if (r === "1W" || r === "W") return 604800;
+  if (r === "1M" || r === "M") return 2592000;
+  const n = parseInt(resolution, 10);
+  if (!isNaN(n)) return n * 60;
+  return 3600;
+}
+
 export async function fetchPythBenchmarkHistory(
   symbol: PolkadotSymbol,
   options: BenchmarkHistoryOptions = {}
 ): Promise<BenchmarkHistoryPoint[]> {
   const resolution = toPythResolution(options);
-  const to = Math.floor(Date.now() / 1000);
+  const nowUtc = Math.floor(Date.now() / 1000);
+  const resSeconds = resolutionToSeconds(resolution);
+  const to = nowUtc + resSeconds;
   const rawRange =
     options.rangeSeconds ?? (options.rangeHours ?? 168) * 3600;
   const rangeSeconds = Math.min(rawRange, PYTH_MAX_RANGE_SECONDS);
-  const from = Math.max(0, to - rangeSeconds);
+  const from = Math.max(0, nowUtc - rangeSeconds);
   const benchSymbol = options.symbolOverride ?? BENCHMARKS_SYMBOL[symbol] ?? symbol;
 
   const url = `${PYTH_BENCHMARKS_URL}/history?symbol=${encodeURIComponent(benchSymbol)}&resolution=${encodeURIComponent(resolution)}&from=${from}&to=${to}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { cache: "no-store", headers: { "Cache-Control": "no-cache", Pragma: "no-cache" } });
   if (!res.ok) {
     throw new Error(`Pyth Benchmarks history error: ${res.status}`);
   }
@@ -297,6 +309,12 @@ export async function fetchPythBenchmarkHistory(
     });
   }
 
-  // Pyth returns chronological (oldest-first); no reverse needed
-  return points;
+  // Chart libraries require strictly ascending order by time (no duplicates)
+  points.sort((a, b) => a.time - b.time);
+  const seen = new Set<number>();
+  return points.filter((p) => {
+    if (seen.has(p.time)) return false;
+    seen.add(p.time);
+    return true;
+  });
 }

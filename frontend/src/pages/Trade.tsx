@@ -6,6 +6,8 @@ import { CONTRACTS } from "@/config/contracts";
 import { PERPETUAL_DEX_ABI, symbolToBytes32 } from "@/abis/PerpetualDEX";
 import { ERC20_ABI } from "@/abis/Token";
 import IndicatorPanel from "@/components/IndicatorPanel";
+import RadarSignalPanel from "@/components/RadarSignalPanel";
+import AIChatbotWidget from "@/components/AIChatbotWidget";
 import TVChartContainer from "@/components/TVChartContainer";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePolkadotPrices, type PolkadotSymbol } from "@/hooks/usePolkadotPrices";
@@ -781,6 +783,7 @@ export default function Trade() {
   };
 
   return (
+    <>
     <div className="flex flex-col gap-6 -mx-2">
       {infoModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-8">
@@ -1234,6 +1237,13 @@ export default function Trade() {
                   </div>
                 </div>
               )}
+
+              {/* ── Signal Radar ── */}
+              <RadarSignalPanel
+                symbol={chartSymbol}
+                resolution={chartResolution}
+                tradingViewSymbol={tradingviewSymbol}
+              />
             </>
           )}
         </div>
@@ -1299,5 +1309,9 @@ export default function Trade() {
       </div>
 
     </div>
+
+    {/* ── AI Chatbot Widget — fixed bottom-right ── */}
+    <AIChatbotWidget />
+    </>
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
   createChart,
   ColorType,
@@ -33,13 +33,12 @@ const MOMENTUM_LENGTH = 12;
 const ADX_LENGTH = 14;
 const HT_AMPLITUDE = 2;
 const HT_CHANNEL_DEV = 2;
-const DEFAULT_RIGHT_OFFSET = 60;
+const DEFAULT_RIGHT_OFFSET = 30;
 const TPO_ACTIVE_BARS = 14;
 const TPO_ATR_PERIOD = 5;
 const TPO_ROW_DETAIL_PCT = 70;
 const TPO_PERCENT_VA = 65;
-
-const FOOTPRINT_LINE_COLOR = "#facc15";
+const INDICATOR_PANEL_MIN_HEIGHT = 320;
 const IMBALANCE_THRESHOLD = 0.35;
 const IMBALANCE_MIN_VOL = 5;
 
@@ -53,6 +52,64 @@ const POLKADOT_TO_BINANCE: Record<PolkadotSymbol, string> = {
   ETHUSD: "ETHUSDT",
   DOTUSD: "DOTUSDT",
 };
+
+const CHATBOT_EVENT_NAME = "ai-chatbot-request";
+type ChatbotRequestDetail = {
+  topic: "indicators";
+  prompt: string;
+  indicatorId?: string;
+  label?: string;
+};
+
+interface AddToChatbotButtonProps {
+  indicatorId: string;
+  label: string;
+  question?: string;
+}
+
+const INDICATOR_LABELS: Record<string, string> = {
+  "ema-sma": "EMA & SMA Chart",
+  "rsi": "RSI Chart",
+  "adx": "ADX Chart",
+  "momentum": "Momentum (12)",
+  "footprint": "Footprint History",
+};
+
+function dispatchChatbotRequest(detail: ChatbotRequestDetail) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(CHATBOT_EVENT_NAME, { detail }));
+}
+
+function AddToChatbotButton({ indicatorId, label, question }: AddToChatbotButtonProps) {
+  const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    dispatchChatbotRequest({
+      topic: "indicators",
+      prompt: question ?? `Explain what the ${label} is showing right now.`,
+      indicatorId,
+      label,
+    });
+  };
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      className="absolute bottom-3 right-3 z-30 flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-100 shadow-lg shadow-indigo-500/50 transition hover:bg-white/20"
+      style={{ pointerEvents: "auto" }}
+      title="Add to AI Chatbot"
+    >
+      <svg width="12" height="12" viewBox="0 0 12 12" className="inline-block">
+        <path
+          d="M6 1v10M1 6h10"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+        />
+      </svg>
+      <span>Add to AI</span>
+    </button>
+  );
+}
 
 interface IndicatorPanelProps {
   symbol: PolkadotSymbol;
@@ -69,17 +126,23 @@ interface IndicatorPanelProps {
 /** Pyth Benchmarks API caps history at 1 year (~365 days) */
 const MAX_RANGE_SECONDS = 360 * 86400;
 
-/** Format time scale labels in user's local timezone */
-function localTickMarkFormatter(time: Time, tickMarkType: TickMarkType, locale: string): string | null {
-  let d: Date;
-  if (typeof time === "number") {
-    d = new Date(time * 1000);
-  } else if (typeof time === "string") {
-    d = new Date(time);
-  } else {
-    d = new Date(time.year, time.month - 1, time.day);
+const USER_TIMEZONE = typeof Intl !== "undefined" ? Intl.DateTimeFormat().resolvedOptions().timeZone : "UTC";
+const USER_LOCALE = typeof navigator !== "undefined" ? navigator.language : "en";
+
+function formatTimeLocal(time: Time): Date {
+  if (typeof time === "number") return new Date(time * 1000);
+  if (typeof time === "string") return new Date(time);
+  const t = time as { year?: number; month?: number; day?: number };
+  if (t?.year != null && t?.month != null && t?.day != null) {
+    return new Date(Date.UTC(t.year, t.month - 1, t.day));
   }
-  const opts: Intl.DateTimeFormatOptions = {};
+  return new Date();
+}
+
+/** Format time scale labels in user's local timezone (matches TradingView) */
+function localTickMarkFormatter(time: Time, tickMarkType: TickMarkType, _locale: string): string | null {
+  const d = formatTimeLocal(time);
+  const opts: Intl.DateTimeFormatOptions = { timeZone: USER_TIMEZONE };
   switch (tickMarkType) {
     case TickMarkType.Year:
       opts.year = "numeric";
@@ -104,127 +167,89 @@ function localTickMarkFormatter(time: Time, tickMarkType: TickMarkType, locale: 
     default:
       return null;
   }
-  return d.toLocaleString(locale, opts);
+  return d.toLocaleString(USER_LOCALE, opts);
 }
 
-/** Map TradingView resolution to Pyth API params and range */
-function IndicatorSubChart({
-  title,
-  legend,
-  series,
-  color,
-  fullWidth = false,
-  rightOffset,
-  zones,
-  zoneGradient,
-}: IndicatorSubChartProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<IChartApi | null>(null);
-  const lineSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
-  const zoneSeriesRefs = useRef<ReturnType<IChartApi["addLineSeries"]>[]>([]);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return undefined;
-
-    const chart = createChart(container, {
-      layout: {
-        background: { type: ColorType.Solid, color: "#0c101f" },
-        textColor: "#94a3b8",
-        fontFamily: "inherit",
-      },
-      grid: { vertLines: { color: "#161b30" }, horzLines: { color: "#161b30" } },
-      rightPriceScale: {
-        visible: true,
-        borderVisible: true,
-        borderColor: "#363a59",
-        scaleMargins: { top: 0.05, bottom: 0.2 },
-      },
-      timeScale: { visible: false, rightOffset: rightOffset ?? DEFAULT_RIGHT_OFFSET },
-      width: Math.max(container.clientWidth, 300),
-      height: 240,
+/** Localization for all indicator charts - use user's timezone (matches TradingView) */
+const CHART_LOCALIZATION = {
+  locale: USER_LOCALE,
+  timeFormatter: (time: Time) => {
+    const d = formatTimeLocal(time);
+    return d.toLocaleString(USER_LOCALE, {
+      timeZone: USER_TIMEZONE,
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
     });
+  },
+};
 
-    chartRef.current = chart;
-    lineSeriesRef.current = chart.addLineSeries({
-      color,
-      lineWidth: 2,
-      priceLineVisible: false,
-    });
-    chart.timeScale().fitContent();
-    chart.priceScale("right").applyOptions({ autoScale: true, alignLabels: true });
-
-    const ro = new ResizeObserver(() => {
-      chart.applyOptions({ width: Math.max(container.clientWidth, 300) });
-    });
-    ro.observe(container);
-
-    return () => {
-      ro.disconnect();
-      chart.remove();
-      chartRef.current = null;
-      lineSeriesRef.current = null;
-    };
-  }, [color, rightOffset]);
-
-  useEffect(() => {
-    if (!lineSeriesRef.current) return;
-    lineSeriesRef.current.setData(series.map((point) => ({ time: point.time, value: point.value })));
-  }, [series]);
-
-  useEffect(() => {
-    if (!chartRef.current) return;
-    zoneSeriesRefs.current.forEach((seriesRef) => chartRef.current?.removeSeries(seriesRef));
-    zoneSeriesRefs.current = [];
-    if (!zones?.length) return;
-    zoneSeriesRefs.current = zones.map((zone) => {
-      const zoneSeries = chartRef.current!.addLineSeries({
-        color: zone.color,
-        lineWidth: (zone.lineWidth ?? 1) as LineWidth,
-        lineStyle: zone.lineStyle ?? LineStyle.Dashed,
-        priceLineVisible: false,
-      });
-      zoneSeries.setData(series.map((point) => ({ time: point.time, value: zone.value })));
-      return zoneSeries;
-    });
-    return () => {
-      zoneSeriesRefs.current.forEach((seriesRef) => chartRef.current?.removeSeries(seriesRef));
-      zoneSeriesRefs.current = [];
-    };
-  }, [zones, series]);
-
-  const latestValue = series[series.length - 1]?.value;
+function IOSToggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
   return (
-    <div className={`rounded-2xl border border-[#363a59] bg-[#080a14] p-4 text-sm ${fullWidth ? "w-full" : ""}`}>
-      <div className="flex items-center justify-between pb-3 text-xs uppercase tracking-[0.4em] text-slate-500">
-        <span>{title}</span>
-        <span className="text-slate-400">{legend}</span>
-      </div>
-      <div className="text-lg font-semibold text-white mb-2">{latestValue?.toFixed(2) ?? "—"}</div>
-      <div className="rounded-xl border border-[#1d2142] bg-[#0d0f18] overflow-hidden mt-3 relative" style={{ minHeight: 140 }}>
-        {zoneGradient && (
-          <div
-            className="absolute inset-0 pointer-events-none opacity-70"
-            style={{ background: zoneGradient }}
-          />
-        )}
-        <div ref={containerRef} className="w-full h-[240px]" />
-      </div>
-    </div>
+    <button
+      type="button"
+      onClick={() => onChange(!value)}
+      className="relative inline-flex h-[22px] w-[40px] shrink-0 items-center rounded-full transition-colors duration-300 focus:outline-none"
+      style={{
+        background: value ? "#3d51ff" : "#1e2033",
+        boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.07)",
+      }}
+    >
+      <span
+        className="inline-block h-[16px] w-[16px] rounded-full bg-white shadow-md transition-transform duration-300"
+        style={{ transform: value ? "translateX(20px)" : "translateX(3px)" }}
+      />
+    </button>
   );
 }
 
 function MultiSeriesSubChart({
   title,
   seriesSets,
-  rightOffset,
+  visibleLogicalRange,
+  logicalOffset = 0,
   zones,
   zoneGradient,
+  signalSet,
+  topWarning,
 }: MultiSeriesChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const lineSeriesRefs = useRef<ReturnType<IChartApi["addLineSeries"]>[]>([]);
+  const [hoverSignal, setHoverSignal] = useState<{
+    x: number;
+    y: number;
+    signal: SignalEntry;
+    accuracy: SignalAccuracy;
+  } | null>(null);
+  const signalMarkers = useMemo<SeriesMarker<Time>[]>(() => {
+    if (!signalSet) return [];
+    const markers: SeriesMarker<Time>[] = [];
+    signalSet.long.forEach((s) => {
+      markers.push({
+        time: s.time,
+        position: "belowBar",
+        color: "#00C853",
+        shape: "circle",
+        text: "LONG",
+      });
+    });
+    signalSet.short.forEach((s) => {
+      markers.push({
+        time: s.time,
+        position: "aboveBar",
+        color: "#F44336",
+        shape: "circle",
+        text: "SHORT",
+      });
+    });
+    return markers.sort((a, b) => (a.time as number) - (b.time as number));
+  }, [signalSet]);
 
+  const seriesCount = seriesSets.length;
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return undefined;
@@ -238,9 +263,16 @@ function MultiSeriesSubChart({
       grid: { vertLines: { color: "#161b30" }, horzLines: { color: "#161b30" } },
       rightPriceScale: { visible: true, borderVisible: true, borderColor: "#363a59", scaleMargins: { top: 0.05, bottom: 0.2 }, alignLabels: true },
       leftPriceScale: { visible: false },
-      timeScale: { visible: false, rightOffset: rightOffset ?? DEFAULT_RIGHT_OFFSET },
+      localization: CHART_LOCALIZATION,
+      timeScale: {
+        borderColor: "#363a59",
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: DEFAULT_RIGHT_OFFSET,
+        tickMarkFormatter: localTickMarkFormatter,
+      },
       width: Math.max(container.clientWidth, 300),
-      height: 240,
+      height: INDICATOR_PANEL_MIN_HEIGHT,
     });
 
     chartRef.current = chart;
@@ -258,7 +290,6 @@ function MultiSeriesSubChart({
     );
     chart.timeScale().fitContent();
     chart.priceScale("right").applyOptions({ autoScale: true });
-    chart.priceScale("right").applyOptions({ autoScale: true });
 
     const ro = new ResizeObserver(() => {
       chart.applyOptions({ width: Math.max(container.clientWidth, 300) });
@@ -271,15 +302,23 @@ function MultiSeriesSubChart({
       chartRef.current = null;
       lineSeriesRefs.current = [];
     };
-  }, [seriesSets, rightOffset]);
+  }, [seriesCount]);
 
   useEffect(() => {
     if (!lineSeriesRefs.current.length) return;
     lineSeriesRefs.current.forEach((seriesRef, index) => {
-      const data = seriesSets[index]?.data ?? [];
-      seriesRef.setData(data.map((point) => ({ time: point.time, value: point.value })));
+      const raw = seriesSets[index]?.data ?? [];
+      const sorted = [...raw].sort((a, b) => (a.time as number) - (b.time as number));
+      seriesRef.setData(sorted.map((point) => ({ time: point.time, value: point.value })));
+      const color = seriesSets[index]?.color;
+      if (color) seriesRef.applyOptions({ color });
     });
   }, [seriesSets]);
+
+  useEffect(() => {
+    if (!signalSet || !lineSeriesRefs.current.length) return;
+    lineSeriesRefs.current[0].setMarkers(signalMarkers);
+  }, [signalMarkers, signalSet]);
 
   useEffect(() => {
     if (!chartRef.current) return;
@@ -297,6 +336,46 @@ function MultiSeriesSubChart({
       zoneSeries?.forEach((seriesRef) => chartRef.current?.removeSeries(seriesRef));
     };
   }, [zones, seriesSets]);
+
+  useEffect(() => {
+    if (!signalSet || !chartRef.current) {
+      setHoverSignal(null);
+      return;
+    }
+    const chart = chartRef.current;
+    const lookup = new Map<number, SignalEntry>();
+    signalSet.long.concat(signalSet.short).forEach((s) => lookup.set(s.time as number, s));
+    const handler = (param: any) => {
+      if (!param.time || !param.point) {
+        setHoverSignal(null);
+        return;
+      }
+      const entry = lookup.get(param.time as number);
+      if (!entry) {
+        setHoverSignal(null);
+        return;
+      }
+      const accuracy = entry.type === "long" ? signalSet.longAccuracy : signalSet.shortAccuracy;
+      setHoverSignal({ x: param.point.x, y: param.point.y, signal: entry, accuracy });
+    };
+    chart.subscribeCrosshairMove(handler);
+    return () => {
+      chart.unsubscribeCrosshairMove(handler);
+    };
+  }, [signalSet]);
+
+  useEffect(() => {
+    if (!chartRef.current || !visibleLogicalRange) return;
+    const subFrom = visibleLogicalRange.from - logicalOffset;
+    const subTo = visibleLogicalRange.to - logicalOffset;
+    const clampedFrom = Math.max(0, subFrom);
+    if (clampedFrom <= subTo) {
+      chartRef.current.timeScale().setVisibleLogicalRange({
+        from: clampedFrom,
+        to: subTo,
+      });
+    }
+  }, [visibleLogicalRange, seriesSets, logicalOffset]);
 
   const latestValues = seriesSets.map((series) => ({
     label: series.label,
@@ -326,305 +405,373 @@ function MultiSeriesSubChart({
           ))}
         </div>
       </div>
-      <div className="rounded-xl border border-[#1d2142] bg-[#0d0f18] overflow-hidden relative" style={{ minHeight: 240 }}>
+      {topWarning && (
+        <div className="mb-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-[10px] text-amber-400/90 normal-case tracking-normal">
+          {topWarning}
+        </div>
+      )}
+      <div
+        className="rounded-xl border border-[#1d2142] bg-[#0d0f18] overflow-hidden relative"
+        style={{ height: INDICATOR_PANEL_MIN_HEIGHT }}
+      >
         {zoneGradient && (
           <div
             className="absolute inset-0 pointer-events-none opacity-70"
             style={{ background: zoneGradient }}
           />
         )}
-        <div ref={containerRef} className="w-full h-[240px]" />
+        <div
+          ref={containerRef}
+          className="w-full"
+          style={{ height: INDICATOR_PANEL_MIN_HEIGHT }}
+        />
+        {hoverSignal && signalSet && (() => {
+          const isLong = hoverSignal.signal.type === "long";
+          const stats = hoverSignal.accuracy;
+          const tooltipW = 220;
+          const containerW = containerRef.current?.clientWidth ?? 360;
+          const rawLeft = hoverSignal.x + 14;
+          const left = rawLeft + tooltipW > containerW ? hoverSignal.x - tooltipW - 6 : rawLeft;
+          const top = Math.max(4, Math.min(hoverSignal.y - 30, 170));
+          const signalTime = hoverSignal.signal.time as number;
+          const signalTimeLabel = new Date(signalTime * 1000).toLocaleString();
+          const rsiData = seriesSets[0]?.data ?? [];
+          const rsiAtSignal = rsiData.find((p) => (p.time as number) === signalTime)?.value ??
+            (() => {
+              const sorted = [...rsiData].sort(
+                (a, b) =>
+                  Math.abs((a.time as number) - signalTime) - Math.abs((b.time as number) - signalTime)
+              );
+              return sorted[0]?.value;
+            })();
+          const fmt = (v: number) =>
+            v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          const longGradient = "linear-gradient(135deg, rgba(0,200,83,0.25) 0%, rgba(76,175,80,0.4) 100%)";
+          const shortGradient = "linear-gradient(135deg, rgba(244,67,54,0.2) 0%, rgba(229,57,53,0.35) 100%)";
+          return (
+            <div
+              className="absolute z-10 pointer-events-none select-none rounded-xl border p-3 text-xs text-white shadow-2xl backdrop-blur"
+              style={{
+                left,
+                top,
+                width: tooltipW,
+                background: isLong ? longGradient : shortGradient,
+                borderColor: isLong ? "rgba(0,200,83,0.5)" : "rgba(244,67,54,0.5)",
+              }}
+            >
+              <div
+                className="mb-2 flex items-center gap-1 font-semibold text-[13px] uppercase tracking-wider"
+                style={{ color: isLong ? "#00C853" : "#F44336" }}
+              >
+                <span>●</span>
+                <span>Signal Type: {isLong ? "Long" : "Short"}</span>
+              </div>
+              <div className="flex justify-between mb-1 text-[12px]">
+                <span className="text-slate-400">Signal Time</span>
+                <span className="font-mono">{signalTimeLabel}</span>
+              </div>
+              <div className="flex justify-between mb-1 text-[12px]">
+                <span className="text-slate-400">Price</span>
+                <span className="font-mono">${fmt(hoverSignal.signal.entryPrice)}</span>
+              </div>
+              <div className="flex justify-between mb-1 text-[12px]">
+                <span className="text-slate-400">{seriesSets[0]?.label ?? "Value"}</span>
+                <span className="font-mono">{rsiAtSignal != null ? rsiAtSignal.toFixed(2) : "—"}</span>
+              </div>
+              <div className="flex justify-between mb-2 text-[12px]">
+                <span className="text-slate-400">Leverage (Suggest)</span>
+                <span className="font-mono font-semibold" style={{ color: isLong ? "#00C853" : "#F44336" }}>
+                  10x
+                </span>
+              </div>
+              <div className="border-t border-[#2a2d4a] pt-2">
+                {stats.total === 0 ? (
+                  <div className="text-slate-500 text-[10px]">Not enough data</div>
+                ) : (
+                  <>
+                    <div className="flex justify-between mb-0.5">
+                      <span className="text-slate-400">Correct / Total</span>
+                      <span>{stats.correct} / {stats.total}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Win Rate</span>
+                      <span
+                        className="font-semibold"
+                        style={{ color: stats.pct >= 50 ? "#4ade80" : "#f87171" }}
+                      >
+                        {stats.pct.toFixed(1)}%
+                      </span>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
 }
 
+/** VPOC (Volume Point of Control) box styling - matches the barVPOC indicator concept */
+const VPOC_DEFAULTS = {
+  boxColor: "#facc15",
+  boxWidth: 4,
+  lineOpacity: 100,
+  lineWidth: 1,
+};
+
 interface FootprintHistoryChartProps {
   polkadotSymbol?: PolkadotSymbol;
   priceBin: number;
-  lineColor: string;
-  numBars?: number;
-  barSeconds?: number;
-  resolution?: string;
   displayPrice?: number;
+  resolution?: string;
+  visibleLogicalRange?: { from: number; to: number } | null;
+  /** VPOC box color (default: #facc15) */
+  vpocBoxColor?: string;
+  /** VPOC box width factor - box height = 2 * tickSize/boxWidth (default: 4) */
+  vpocBoxWidth?: number;
+  /** VPOC line opacity 0-100 (default: 100) */
+  vpocLineOpacity?: number;
+  /** VPOC line thickness (default: 1) */
+  vpocLineWidth?: number;
 }
 
 function FootprintHistoryChart({
   polkadotSymbol,
   priceBin,
-  lineColor,
-  numBars,
-  barSeconds = 60,
-  resolution,
   displayPrice,
+  resolution,
+  visibleLogicalRange,
+  vpocBoxColor = VPOC_DEFAULTS.boxColor,
+  vpocBoxWidth = VPOC_DEFAULTS.boxWidth,
+  vpocLineOpacity = VPOC_DEFAULTS.lineOpacity,
+  vpocLineWidth = VPOC_DEFAULTS.lineWidth,
 }: FootprintHistoryChartProps) {
+  const barSeconds = tvResolutionToSeconds(resolution ?? "1");
   const binanceSymbol = polkadotSymbol ? POLKADOT_TO_BINANCE[polkadotSymbol] ?? "BTCUSDT" : "BTCUSDT";
   const { bars, loading, error } = useBinanceFootprintHistory(
     binanceSymbol,
     barSeconds,
     priceBin,
-    numBars,
-    Math.max(barSeconds * 1000, 30_000)
+    undefined,
+    Math.max(barSeconds * 1000, 15_000)
   );
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [hoverInfo, setHoverInfo] = useState<{
-    price: number;
-    x: number;
-    y: number;
-    color: string;
-  } | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const candlestickRef = useRef<ReturnType<IChartApi["addCandlestickSeries"]> | null>(null);
 
-  // Layout constants
-  const LABEL_W = 68;   // Y-axis price labels
-  const TIME_H = 22;    // X-axis time labels
-  const BAR_W = 90;     // width per bar column
-  const ROW_H = 18;     // height per price level row
-  const PAD = 1;        // gap between cells
-
-  // Collect all unique price levels (sorted descending)
-  const { sortedPrices, decimals, canvasW, canvasH, barsWidth } = useMemo(() => {
-    if (bars.length === 0) return { sortedPrices: [], decimals: 0, canvasW: 200, canvasH: 120, barsWidth: 0 };
-    const allLevels = new Set<number>();
-    bars.forEach((bar) => {
-      Object.keys(bar.clusters).forEach((l) => allLevels.add(Number(l)));
-    });
-    const dec = Math.max(0, -Math.floor(Math.log10(priceBin)));
-    const sorted = Array.from(allLevels).sort((a, b) => b - a);
-    const barsW = bars.length * BAR_W;
-    const cW = barsW + LABEL_W;
-    const cH = sorted.length * ROW_H + TIME_H;
-    return { sortedPrices: sorted, decimals: dec, canvasW: cW, canvasH: cH, barsWidth: barsW };
-  }, [bars, priceBin]);
-
-  const containerHeight = Math.max(canvasH, 420);
   const symbolLabel = polkadotSymbol ?? "BTCUSD";
   const formattedPrice =
     displayPrice == null
       ? "—"
       : `$${displayPrice.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  const fallbackResolution =
+  const resolutionLabel =
     barSeconds >= 86400
       ? `${barSeconds / 86400}D`
       : barSeconds >= 3600
       ? `${barSeconds / 3600}h`
       : `${barSeconds / 60}m`;
-  const resolutionLabel = resolution ?? fallbackResolution;
+
+  const candlestickData = useMemo(() => {
+    return bars.map((bar) => ({
+      time: Math.floor(bar.barStart) as UTCTimestamp,
+      open: bar.open,
+      high: bar.high,
+      low: bar.low,
+      close: bar.close,
+    }));
+  }, [bars]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || bars.length === 0 || sortedPrices.length === 0) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const container = containerRef.current;
+    if (!container) return undefined;
 
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = canvasW * dpr;
-    canvas.height = canvasH * dpr;
-    canvas.style.width = canvasW + "px";
-    canvas.style.height = canvasH + "px";
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, canvasW, canvasH);
+    const chart = createChart(container, {
+      layout: {
+        background: { type: ColorType.Solid, color: "#0c101f" },
+        textColor: "#94a3b8",
+        fontFamily: "inherit",
+      },
+      grid: { vertLines: { color: "#161b30" }, horzLines: { color: "#161b30" } },
+      rightPriceScale: {
+        visible: true,
+        borderVisible: true,
+        borderColor: "#363a59",
+        scaleMargins: { top: 0.05, bottom: 0.2 },
+        alignLabels: true,
+      },
+      leftPriceScale: { visible: false },
+      localization: CHART_LOCALIZATION,
+      timeScale: {
+        borderColor: "#363a59",
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: DEFAULT_RIGHT_OFFSET,
+        tickMarkFormatter: localTickMarkFormatter,
+      },
+      width: Math.max(container.clientWidth, 300),
+      height: INDICATOR_PANEL_MIN_HEIGHT,
+    });
 
-    // Global background
-    ctx.fillStyle = "#080a14";
-    ctx.fillRect(0, 0, canvasW, canvasH);
+    chartRef.current = chart;
+    candlestickRef.current = chart.addCandlestickSeries({
+      upColor: "rgba(37,211,102,0.35)",
+      downColor: "rgba(248,113,113,0.35)",
+      borderUpColor: "rgba(37,211,102,0.6)",
+      borderDownColor: "rgba(248,113,113,0.6)",
+      wickUpColor: "rgba(37,211,102,0.5)",
+      wickDownColor: "rgba(248,113,113,0.5)",
+    });
 
-    // Find global max vol for scaling bars within each column
-    const colMaxVol = bars.map((bar) =>
-      Math.max(1, ...Object.values(bar.clusters).map((c) => c.total_vol))
-    );
+    chart.timeScale().fitContent();
+    chart.priceScale("right").applyOptions({ autoScale: true });
 
-    const priceTop = sortedPrices[0] ?? 0;
-    const priceBottom = sortedPrices[sortedPrices.length - 1] ?? priceTop;
-    const priceRange = Math.max(0.0001, priceTop - priceBottom);
-    const priceToY = (price: number) => {
-      const constrained = Math.min(priceTop, Math.max(priceBottom, price));
-      return ((priceTop - constrained) / priceRange) * sortedPrices.length * ROW_H;
+    const ro = new ResizeObserver(() => {
+      chart.applyOptions({ width: Math.max(container.clientWidth, 300) });
+    });
+    ro.observe(container);
+
+    return () => {
+      ro.disconnect();
+      chart.remove();
+      chartRef.current = null;
+      candlestickRef.current = null;
     };
+  }, []);
 
-    bars.forEach((bar, barIdx) => {
-      const colX = barIdx * BAR_W;
-      const barCenterX = colX + BAR_W / 2;
-      const bodyWidth = Math.max(1, (BAR_W * 2) / 3);
-      const bodyLeft = barCenterX - bodyWidth / 2;
-      const maxVol = colMaxVol[barIdx];
+  useEffect(() => {
+    if (!candlestickRef.current) return;
+    candlestickRef.current.setData(candlestickData);
+  }, [candlestickData]);
 
-      sortedPrices.forEach((price, priceIdx) => {
-        const cellY = priceIdx * ROW_H;
-        const priceKey = price.toFixed(decimals);
-        const cluster = bar.clusters[priceKey];
-        const isVpoc = bar.vpocPrice === priceKey;
+  useEffect(() => {
+    if (!chartRef.current) return;
+    chartRef.current.timeScale().applyOptions({
+      rightOffset: DEFAULT_RIGHT_OFFSET,
+    });
+  }, []);
 
-        // Cell background
-        ctx.fillStyle = isVpoc
-          ? "rgba(250,204,21,0.10)"
-          : priceIdx % 2 === 0
-          ? "#0a0d1b"
-          : "#0c0f1e";
-        ctx.fillRect(colX + PAD, cellY, BAR_W - PAD * 2, ROW_H - 1);
+  useEffect(() => {
+    if (!chartRef.current || !visibleLogicalRange || candlestickData.length === 0) return;
+    const lastIdx = candlestickData.length - 1;
+    const clampedFrom = Math.max(0, visibleLogicalRange.from);
+    const from = clampedFrom <= visibleLogicalRange.to ? clampedFrom : Math.max(0, lastIdx - 30);
+    const to = clampedFrom <= visibleLogicalRange.to ? visibleLogicalRange.to : lastIdx;
+    chartRef.current.timeScale().setVisibleLogicalRange({ from, to });
+  }, [visibleLogicalRange, candlestickData]);
 
-        if (cluster && cluster.total_vol > 0) {
-          const half = (BAR_W - PAD * 2) / 2;
+  useEffect(() => {
+    const chart = chartRef.current;
+    const series = candlestickRef.current;
+    const overlay = overlayRef.current;
+    if (!chart || !series || !overlay || bars.length === 0) return;
+
+    const drawFootprintOverlay = () => {
+      const timeScale = chart.timeScale();
+      const tickSize = priceBin;
+      const halfHeight = tickSize / Math.max(vpocBoxWidth, 0.1);
+      const vpocOpacity = Math.max(0, Math.min(1, vpocLineOpacity / 100));
+
+      const ctx = overlay.getContext("2d");
+      if (!ctx) return;
+
+      overlay.width = overlay.clientWidth;
+      overlay.height = overlay.clientHeight;
+      ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+      for (let i = 0; i < bars.length; i++) {
+        const bar = bars[i];
+        const prevBar = bars[i - 1];
+        const nextBar = bars[i + 1];
+
+        const tCur = Math.floor(bar.barStart) as UTCTimestamp;
+        const xCur = timeScale.timeToCoordinate(tCur);
+        if (xCur == null) continue;
+
+        const tPrev = prevBar ? Math.floor(prevBar.barStart) : tCur - barSeconds;
+        const tNext = nextBar ? Math.floor(nextBar.barStart) : tCur + barSeconds;
+        const xPrev = timeScale.timeToCoordinate(tPrev as UTCTimestamp);
+        const xNext = timeScale.timeToCoordinate(tNext as UTCTimestamp);
+
+        const barSpacing = (xNext ?? xCur + 50) - (xPrev ?? xCur - 50);
+        const left = xCur - barSpacing * 0.5;
+        const right = xCur + barSpacing * 0.5;
+        const barWidth = right - left;
+        const maxVol = Math.max(1, ...Object.values(bar.clusters).map((c) => c.total_vol));
+
+        for (const [priceKey, cluster] of Object.entries(bar.clusters)) {
+          if (cluster.total_vol <= 0) continue;
+
+          const price = Number(priceKey);
+          const yTop = series.priceToCoordinate(price + tickSize / 2);
+          const yBottom = series.priceToCoordinate(price - tickSize / 2);
+          if (yTop == null || yBottom == null) continue;
+
+          const cellH = yBottom - yTop;
+          const half = barWidth / 2;
           const buyW = (cluster.buy_vol / maxVol) * half;
           const sellW = (cluster.sell_vol / maxVol) * half;
-          const cellH = ROW_H - 2;
+
+          ctx.fillStyle = "rgba(10,13,27,0.6)";
+          ctx.fillRect(left, yTop, barWidth, cellH);
+
           const imbalance = cluster.buy_vol - cluster.sell_vol;
           const strength = Math.abs(imbalance) / Math.max(cluster.total_vol, 1);
           if (cluster.total_vol >= IMBALANCE_MIN_VOL && strength >= IMBALANCE_THRESHOLD) {
-            ctx.fillStyle = imbalance > 0 ? "rgba(34,197,94,0.12)" : "rgba(248,113,113,0.12)";
-            ctx.fillRect(colX + PAD, cellY + 1, BAR_W - PAD * 2, cellH);
+            ctx.fillStyle = imbalance > 0 ? "rgba(34,197,94,0.2)" : "rgba(248,113,113,0.2)";
+            ctx.fillRect(left, yTop, barWidth, cellH);
           }
 
-          ctx.fillStyle = "rgba(34,197,94,0.72)";
-          ctx.fillRect(colX + PAD + half, cellY + 1, buyW, cellH);
+          ctx.fillStyle = "rgba(34,197,94,0.85)";
+          ctx.fillRect(left + half, yTop + 1, buyW, cellH - 2);
+          ctx.fillStyle = "rgba(248,113,113,0.85)";
+          ctx.fillRect(left + half - sellW, yTop + 1, sellW, cellH - 2);
 
-          ctx.fillStyle = "rgba(248,113,113,0.72)";
-          ctx.fillRect(colX + PAD + half - sellW, cellY + 1, sellW, cellH);
-        }
-
-        // VPOC highlight border
-        if (isVpoc) {
-          const pocWidth = Math.max(2, bodyWidth - 1);
-          const pocX = bodyLeft + (bodyWidth - pocWidth) / 2;
-          ctx.strokeStyle = lineColor;
-          ctx.lineWidth = 1.5;
-          ctx.strokeRect(pocX, cellY + 0.75, pocWidth, ROW_H - 2.5);
-        }
-
-        if (cluster && cluster.total_vol > 0) {
-          const labelY = cellY + 10;
-          ctx.font = "8px monospace";
-          ctx.fillStyle = "rgba(255,255,255,0.95)";
+          ctx.fillStyle = "rgba(255,255,255,0.9)";
+          ctx.font = "9px monospace";
           ctx.textAlign = "center";
-          ctx.fillText(`${cluster.buy_vol.toFixed(1)} / ${cluster.sell_vol.toFixed(1)}`, barCenterX, labelY);
+          ctx.fillText(
+            `${cluster.buy_vol.toFixed(1)} / ${cluster.sell_vol.toFixed(1)}`,
+            left + barWidth / 2,
+            (yTop + yBottom) / 2 + 3
+          );
         }
 
-      });
-
-      // Column separator
-      ctx.strokeStyle = "#1d2142";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(colX, 0);
-      ctx.lineTo(colX, canvasH - TIME_H);
-      ctx.stroke();
-
-      // Time label (bottom) — format depends on bar duration
-      const d = new Date(bar.barStart * 1000);
-    const timeLabel = barSeconds >= 86400
-      ? `${(d.getMonth() + 1).toString().padStart(2, "0")}/${d.getDate().toString().padStart(2, "0")}`
-      : barSeconds >= 3600
-      ? `${d.getHours().toString().padStart(2, "0")}h`
-      : `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
-      ctx.fillStyle = "#475569";
-      ctx.font = "9px monospace";
-      ctx.textAlign = "center";
-      ctx.fillText(timeLabel, colX + BAR_W / 2, canvasH - 6);
-
-      // VPOC price label below time
-      if (bar.vpocPrice) {
-        ctx.fillStyle = lineColor;
-        ctx.font = "bold 8px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText("V" + bar.vpocPrice, colX + BAR_W / 2, canvasH - 14);
+        if (bar.vpocPrice) {
+          const vpocPrice = Number(bar.vpocPrice);
+          const yTop = series.priceToCoordinate(vpocPrice + halfHeight);
+          const yBottom = series.priceToCoordinate(vpocPrice - halfHeight);
+          if (yTop != null && yBottom != null) {
+            ctx.strokeStyle = vpocBoxColor;
+            ctx.globalAlpha = vpocOpacity;
+            ctx.lineWidth = vpocLineWidth;
+            ctx.strokeRect(left, yTop, barWidth, yBottom - yTop);
+          }
+        }
       }
-
-      const candleColor =
-        bar.close >= bar.open ? "rgba(37,211,102,1)" : "rgba(248,113,113,1)";
-      const highY = priceToY(bar.high);
-      const lowY = priceToY(bar.low);
-      const openY = priceToY(bar.open);
-      const closeY = priceToY(bar.close);
-      const bodyTop = Math.min(openY, closeY);
-      const bodyHeight = Math.max(2, Math.abs(closeY - openY));
-
-      ctx.strokeStyle = candleColor;
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(barCenterX, highY);
-      ctx.lineTo(barCenterX, bodyTop);
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.moveTo(barCenterX, bodyTop + bodyHeight);
-      ctx.lineTo(barCenterX, lowY);
-      ctx.stroke();
-
-      ctx.strokeRect(
-        bodyLeft,
-        bodyTop,
-        bodyWidth,
-        bodyHeight
-      );
-
-    });
-
-    // Price column background
-    ctx.fillStyle = "#050817";
-    ctx.fillRect(barsWidth, 0, LABEL_W, canvasH - TIME_H);
-
-    // Y-axis price labels
-    sortedPrices.forEach((price, i) => {
-      ctx.fillStyle = "#475569";
-      ctx.font = "9px monospace";
-      ctx.textAlign = "right";
-      ctx.fillText(
-        price.toFixed(decimals),
-        barsWidth + LABEL_W - 4,
-        i * ROW_H + ROW_H * 0.72
-      );
-    });
-
-    // Y-axis separator line
-    ctx.strokeStyle = "#1d2142";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(barsWidth, 0);
-    ctx.lineTo(barsWidth, canvasH - TIME_H);
-    ctx.stroke();
-  }, [bars, sortedPrices, decimals, canvasW, canvasH, lineColor, barSeconds, barsWidth]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || bars.length === 0) return undefined;
-    const handleMove = (event: MouseEvent) => {
-      const rect = canvas.getBoundingClientRect();
-      const relX = event.clientX - rect.left;
-      const barIdx = Math.floor(relX / BAR_W);
-      if (barIdx < 0 || barIdx >= bars.length) {
-        setHoverInfo(null);
-        return;
-      }
-      const bar = bars[barIdx];
-      if (!bar || !bar.vpocPrice) {
-        setHoverInfo(null);
-        return;
-      }
-      const cluster = bar.clusters[bar.vpocPrice];
-      if (!cluster) {
-        setHoverInfo(null);
-        return;
-      }
-      let color = "#fff";
-      if (cluster.sell_vol > cluster.buy_vol) {
-        color = "#f87171";
-      } else if (cluster.buy_vol > cluster.sell_vol) {
-        color = "#22c55e";
-      }
-      setHoverInfo({
-        price: Number(bar.vpocPrice),
-        x: event.clientX - rect.left,
-        y: event.clientY - rect.top,
-        color,
-      });
+      ctx.globalAlpha = 1;
     };
-    const handleLeave = () => setHoverInfo(null);
-    canvas.addEventListener("mousemove", handleMove);
-    canvas.addEventListener("mouseleave", handleLeave);
+
+    drawFootprintOverlay();
+
+    const handleRangeChange = () => {
+      requestAnimationFrame(drawFootprintOverlay);
+    };
+
+    chart.timeScale().subscribeVisibleLogicalRangeChange(handleRangeChange);
+    chart.timeScale().subscribeVisibleTimeRangeChange(handleRangeChange);
+
+    const ro = new ResizeObserver(() => requestAnimationFrame(drawFootprintOverlay));
+    ro.observe(overlay);
+
     return () => {
-      canvas.removeEventListener("mousemove", handleMove);
-      canvas.removeEventListener("mouseleave", handleLeave);
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleRangeChange);
+      chart.timeScale().unsubscribeVisibleTimeRangeChange(handleRangeChange);
+      ro.disconnect();
     };
-  }, [bars]);
+  }, [bars, priceBin, vpocBoxColor, vpocBoxWidth, vpocLineOpacity, vpocLineWidth, barSeconds]);
 
   return (
     <div className="rounded-2xl border border-[#363a59] bg-[#080a14] p-4 text-sm w-full">
@@ -648,68 +795,73 @@ function FootprintHistoryChart({
         </div>
       </div>
       <div
-        className="overflow-auto relative flex justify-end rounded-xl border border-[#1d2142] bg-[#080a14]"
-        style={{ minHeight: containerHeight }}
+        className="rounded-xl border border-[#1d2142] bg-[#0d0f18] overflow-hidden relative"
+        style={{ height: INDICATOR_PANEL_MIN_HEIGHT }}
       >
         {bars.length === 0 && !loading && (
-          <div className="flex items-center justify-center h-24 text-xs text-slate-500">
+          <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-500 z-10">
             {error ? `Binance API error: ${error}` : "Đang tải dữ liệu Binance…"}
           </div>
         )}
         {bars.length === 0 && loading && (
-          <div className="flex items-center justify-center h-24 text-xs text-slate-500 animate-pulse">
+          <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-500 animate-pulse z-10">
             Đang tải lịch sử giao dịch…
           </div>
         )}
-        <canvas
-          ref={canvasRef}
-          style={{
-            display: bars.length > 0 ? "block" : "none",
-            marginLeft: "auto",
-          }}
-        />
-      </div>
-      {hoverInfo && (
-        <div
-          className="pointer-events-none absolute z-10 rounded border border-[#363a59] bg-[#0d1020] px-2 py-1 text-[11px] font-mono shadow-lg"
-          style={{
-            left: Math.max(
-              4,
-              Math.min(canvasW - 120, hoverInfo.x + 8)
-            ),
-            top: Math.max(
-              4,
-              Math.min(canvasH - 30, hoverInfo.y - 26)
-            ),
-            color: hoverInfo.color,
-          }}
-        >
-          {`POC ${hoverInfo.price?.toFixed(2) ?? "—"}`}
+        <div className="relative w-full" style={{ height: INDICATOR_PANEL_MIN_HEIGHT }}>
+          <div
+            ref={containerRef}
+            className="w-full h-full"
+            style={{
+              opacity: bars.length > 0 ? 1 : 0.3,
+            }}
+          />
+          <canvas
+            ref={overlayRef}
+            className="absolute inset-0 w-full h-full pointer-events-none"
+            style={{ zIndex: 1 }}
+          />
         </div>
-      )}
+      </div>
     </div>
   );
 }
 
 function resolutionToParams(tvResolution: string): { resolution: string; rangeSeconds: number; resolutionSeconds: number } {
-  const r = String(tvResolution || "1D").trim();
-  const rUpper = r.toUpperCase();
-
+  const trimmed = String(tvResolution || "1D").trim();
+  const upper = trimmed.toUpperCase();
   let resolutionSeconds: number;
   let resolution: string;
+  const leadingNumberMatch = trimmed.match(/^(\d+)/);
+  const numericValue = leadingNumberMatch ? Number(leadingNumberMatch[1]) : NaN;
 
-  if (["1", "2", "5", "15", "30"].includes(rUpper)) {
-    resolutionSeconds = parseInt(r, 10) * 60;
-    resolution = r;
-  } else if (["60", "120", "240"].includes(rUpper)) {
-    resolutionSeconds = parseInt(r, 10) * 60;
-    resolution = r;
-  } else if (rUpper === "1W" || rUpper === "W") {
+  if (upper === "D" || upper === "1D") {
+    resolutionSeconds = 86400;
+    resolution = "1D";
+  } else if (upper === "W" || upper === "1W") {
     resolutionSeconds = 604800;
     resolution = "1W";
-  } else if (rUpper === "1M" || rUpper === "M") {
+  } else if (upper === "M" || upper === "1M") {
     resolutionSeconds = 2592000;
     resolution = "1M";
+  } else if (trimmed.endsWith("m") && !Number.isNaN(numericValue)) {
+    resolutionSeconds = numericValue * 60;
+    resolution = String(numericValue);
+  } else if (trimmed.endsWith("M") && !Number.isNaN(numericValue)) {
+    resolutionSeconds = numericValue * 2592000;
+    resolution = `${numericValue}M`;
+  } else if (trimmed.toLowerCase().endsWith("h") && !Number.isNaN(numericValue)) {
+    resolutionSeconds = numericValue * 3600;
+    resolution = String(numericValue * 60);
+  } else if (trimmed.toLowerCase().endsWith("d") && !Number.isNaN(numericValue)) {
+    resolutionSeconds = numericValue * 86400;
+    resolution = `${numericValue}D`;
+  } else if (trimmed.toLowerCase().endsWith("w") && !Number.isNaN(numericValue)) {
+    resolutionSeconds = numericValue * 604800;
+    resolution = `${numericValue}W`;
+  } else if (/^\d+$/.test(trimmed)) {
+    resolutionSeconds = Number(trimmed) * 60;
+    resolution = trimmed;
   } else {
     resolutionSeconds = 86400;
     resolution = "1D";
@@ -721,25 +873,20 @@ function resolutionToParams(tvResolution: string): { resolution: string; rangeSe
   return { resolution, rangeSeconds, resolutionSeconds };
 }
 
-type IndicatorPoint = { time: UTCTimestamp; value: number };
 
-interface IndicatorSubChartProps {
-  title: string;
-  legend: string;
-  series: IndicatorPoint[];
-  color: string;
-  fullWidth?: boolean;
-  rightOffset?: number;
-  zones?: Array<{ value: number; color: string; lineStyle?: LineStyle; lineWidth?: number }>;
-  zoneGradient?: string;
-}
+type IndicatorPoint = { time: UTCTimestamp; value: number };
 
 interface MultiSeriesChartProps {
   title: string;
   seriesSets: Array<{ label: string; color: string; data: IndicatorPoint[] }>;
-  rightOffset?: number;
+  /** Visible logical range shared from the main/TradingView chart - syncs right offset with main chart */
+  visibleLogicalRange?: { from: number; to: number } | null;
+  /** Offset to map main chart logical indices to sub-chart (e.g. RSI/ADX start after N bars) */
+  logicalOffset?: number;
   zones?: Array<{ value: number; color: string; lineStyle?: LineStyle; lineWidth?: number }>;
   zoneGradient?: string;
+  signalSet?: SignalsResult;
+  topWarning?: string;
 }
 
 function calculateSMA(history: BenchmarkHistoryPoint[], length: number): IndicatorPoint[] {
@@ -795,6 +942,384 @@ function calculateMomentum(history: BenchmarkHistoryPoint[], length: number): In
     time: point.time as UTCTimestamp,
     value: point.close - history[index].close,
   }));
+}
+
+const SIGNAL_TARGET_PCT = 0.01; // 1% profit target for win-rate stats
+
+type SignalEntry = {
+  time: UTCTimestamp;
+  entryPrice: number;
+  target: number;
+  /** true if price reached target within the evaluation window */
+  isCorrect: boolean;
+  type: "long" | "short";
+};
+
+type SignalAccuracy = { correct: number; total: number; pct: number };
+
+type SignalsResult = {
+  long: SignalEntry[];
+  short: SignalEntry[];
+  longAccuracy: SignalAccuracy;
+  shortAccuracy: SignalAccuracy;
+};
+
+function buildSignalAccuracy(signals: SignalEntry[], histIdxByTime: Map<number, number>, historyLength: number): SignalAccuracy {
+  const measured = signals.filter((s) => {
+    const idx = histIdxByTime.get(s.time as number) ?? -1;
+    return idx >= 0 && historyLength - idx > 13;
+  });
+  const correct = measured.filter((s) => s.isCorrect).length;
+  return {
+    correct,
+    total: measured.length,
+    pct: measured.length ? (correct / measured.length) * 100 : 0,
+  };
+}
+
+/** Scan full history for Golden Cross / Death Cross with price & EMA vs SMA + pullback conditions */
+function findCrossSignals(
+  history: BenchmarkHistoryPoint[],
+  smaData: IndicatorPoint[],
+  ema12Data: IndicatorPoint[],
+  ema26Data: IndicatorPoint[]
+): SignalsResult {
+  const longRaw: Array<{ time: UTCTimestamp; histIdx: number }> = [];
+  const shortRaw: Array<{ time: UTCTimestamp; histIdx: number }> = [];
+  const priceByTime = new Map<number, number>();
+  const smaByTime = new Map<number, number>();
+  const ema12ByTime = new Map<number, number>();
+  const histIdxByTime = new Map<number, number>();
+  history.forEach((p, idx) => {
+    priceByTime.set(p.time as number, p.close);
+    histIdxByTime.set(p.time as number, idx);
+  });
+  smaData.forEach((p) => smaByTime.set(p.time as number, p.value));
+  ema12Data.forEach((p) => ema12ByTime.set(p.time as number, p.value));
+
+  for (let i = 1; i < ema26Data.length; i += 1) {
+    const prevEma12 = ema12ByTime.get(ema26Data[i - 1].time as number);
+    const prevEma26 = ema26Data[i - 1].value;
+    const currEma12 = ema12ByTime.get(ema26Data[i].time as number);
+    const currEma26 = ema26Data[i].value;
+    const price = priceByTime.get(ema26Data[i].time as number);
+    const sma = smaByTime.get(ema26Data[i].time as number);
+    const histIdx = histIdxByTime.get(ema26Data[i].time as number);
+    if (
+      prevEma12 == null || currEma12 == null || price == null ||
+      sma == null || prevEma26 == null || currEma26 == null
+    ) continue;
+
+    const goldenCross = prevEma12 <= prevEma26 && currEma12 > currEma26;
+    const deathCross = prevEma12 >= prevEma26 && currEma12 < currEma26;
+    const priceAboveSma = price > sma;
+    const priceBelowSma = price < sma;
+    const emaAboveSma = currEma12 > sma && currEma26 > sma;
+    const emaBelowSma = currEma12 < sma && currEma26 < sma;
+    const nearSma = Math.abs(price - sma) <= sma * 0.01;
+    const nearEma12 = Math.abs(price - currEma12) <= currEma12 * 0.01;
+    const pullback = nearSma || nearEma12;
+
+    if (goldenCross && priceAboveSma && emaAboveSma && pullback) {
+      longRaw.push({ time: ema26Data[i].time as UTCTimestamp, histIdx: histIdx ?? -1 });
+    }
+    if (deathCross && priceBelowSma && emaBelowSma && pullback) {
+      shortRaw.push({ time: ema26Data[i].time as UTCTimestamp, histIdx: histIdx ?? -1 });
+    }
+  }
+
+  const longSignals: SignalEntry[] = longRaw.map(({ time, histIdx }) => {
+    const entryPrice = histIdx >= 0 ? history[histIdx].close : 0;
+    const target = entryPrice * (1 + SIGNAL_TARGET_PCT);
+    const nextBars = histIdx >= 0 ? history.slice(histIdx + 1, histIdx + 27) : [];
+    // Use best available price: prefer high, fallback to close (Pyth intraday may omit OHLC)
+    const isCorrect = nextBars.length > 0 &&
+      nextBars.some((bar) => Math.max(bar.high ?? bar.close, bar.close) >= target);
+    return { time, entryPrice, target, isCorrect, type: "long" };
+  });
+
+  const shortSignals: SignalEntry[] = shortRaw.map(({ time, histIdx }) => {
+    const entryPrice = histIdx >= 0 ? history[histIdx].close : 0;
+    const target = entryPrice * (1 - SIGNAL_TARGET_PCT);
+    const nextBars = histIdx >= 0 ? history.slice(histIdx + 1, histIdx + 27) : [];
+    // Use best available price: prefer low, fallback to close
+    const isCorrect = nextBars.length > 0 &&
+      nextBars.some((bar) => Math.min(bar.low ?? bar.close, bar.close) <= target);
+    return { time, entryPrice, target, isCorrect, type: "short" };
+  });
+
+  return {
+    long: longSignals,
+    short: shortSignals,
+    longAccuracy: buildSignalAccuracy(longSignals, histIdxByTime, history.length),
+    shortAccuracy: buildSignalAccuracy(shortSignals, histIdxByTime, history.length),
+  };
+}
+
+function findRsiDivergenceSignals(
+  history: BenchmarkHistoryPoint[],
+  rsi14Data: IndicatorPoint[],
+  rsi28Data: IndicatorPoint[]
+): SignalsResult {
+  const rsi14ByTime = new Map<number, number>();
+  const rsi28ByTime = new Map<number, number>();
+  const histIdxByTime = new Map<number, number>();
+  history.forEach((p, idx) => histIdxByTime.set(p.time as number, idx));
+  rsi14Data.forEach((p) => rsi14ByTime.set(p.time as number, p.value));
+  rsi28Data.forEach((p) => rsi28ByTime.set(p.time as number, p.value));
+
+  const priceLows: Array<{ idx: number; value: number; time: number }> = [];
+  const priceHighs: Array<{ idx: number; value: number; time: number }> = [];
+  const longCandidates: Array<{ time: UTCTimestamp; histIdx: number }> = [];
+  const shortCandidates: Array<{ time: UTCTimestamp; histIdx: number }> = [];
+
+  for (let i = 1; i < history.length - 1; i += 1) {
+    const prevPrice = history[i - 1].close;
+    const currPrice = history[i].close;
+    const nextPrice = history[i + 1].close;
+    const currTime = history[i].time as number;
+
+    if (currPrice <= prevPrice && currPrice <= nextPrice) {
+      const prevLow = priceLows[priceLows.length - 1];
+      const currRsi14 = rsi14ByTime.get(currTime);
+      const currRsi28 = rsi28ByTime.get(currTime);
+      if (prevLow) {
+        const prevTime = prevLow.time;
+        const prevRsi14 = rsi14ByTime.get(prevTime);
+        const prevRsi28 = rsi28ByTime.get(prevTime);
+        if (
+          currPrice < prevLow.value &&
+          currRsi14 != null &&
+          prevRsi14 != null &&
+          currRsi28 != null &&
+          prevRsi28 != null &&
+          currRsi14 > prevRsi14 &&
+          currRsi28 > prevRsi28
+        ) {
+          longCandidates.push({ time: history[i].time as UTCTimestamp, histIdx: i });
+        }
+      }
+      priceLows.push({ idx: i, value: currPrice, time: currTime });
+    }
+
+    if (currPrice >= prevPrice && currPrice >= nextPrice) {
+      const prevHigh = priceHighs[priceHighs.length - 1];
+      const currRsi14 = rsi14ByTime.get(currTime);
+      const currRsi28 = rsi28ByTime.get(currTime);
+      if (prevHigh) {
+        const prevTime = prevHigh.time;
+        const prevRsi14 = rsi14ByTime.get(prevTime);
+        const prevRsi28 = rsi28ByTime.get(prevTime);
+        if (
+          currPrice > prevHigh.value &&
+          currRsi14 != null &&
+          prevRsi14 != null &&
+          currRsi28 != null &&
+          prevRsi28 != null &&
+          currRsi14 < prevRsi14 &&
+          currRsi28 < prevRsi28
+        ) {
+          shortCandidates.push({ time: history[i].time as UTCTimestamp, histIdx: i });
+        }
+      }
+      priceHighs.push({ idx: i, value: currPrice, time: currTime });
+    }
+  }
+
+  const longSignals: SignalEntry[] = longCandidates.map(({ time, histIdx }) => {
+    const entryPrice = history[histIdx].close;
+    const target = entryPrice * (1 + SIGNAL_TARGET_PCT);
+    const future = history.slice(histIdx + 1, histIdx + 27);
+    const isCorrect = future.length > 0 && future.some((bar) => Math.max(bar.high ?? bar.close, bar.close) >= target);
+    return { time, entryPrice, target, isCorrect, type: "long" };
+  });
+  const shortSignals: SignalEntry[] = shortCandidates.map(({ time, histIdx }) => {
+    const entryPrice = history[histIdx].close;
+    const target = entryPrice * (1 - SIGNAL_TARGET_PCT);
+    const future = history.slice(histIdx + 1, histIdx + 27);
+    const isCorrect = future.length > 0 && future.some((bar) => Math.min(bar.low ?? bar.close, bar.close) <= target);
+    return { time, entryPrice, target, isCorrect, type: "short" };
+  });
+
+  return {
+    long: longSignals,
+    short: shortSignals,
+    longAccuracy: buildSignalAccuracy(longSignals, histIdxByTime, history.length),
+    shortAccuracy: buildSignalAccuracy(shortSignals, histIdxByTime, history.length),
+  };
+}
+
+function findMomentumDivergenceSignals(
+  history: BenchmarkHistoryPoint[],
+  momentumData: IndicatorPoint[]
+): SignalsResult {
+  const momentumByTime = new Map<number, number>();
+  momentumData.forEach((p) => momentumByTime.set(p.time as number, p.value));
+
+  const priceLows: Array<{ idx: number; value: number; time: number }> = [];
+  const priceHighs: Array<{ idx: number; value: number; time: number }> = [];
+  const longCandidates: Array<{ time: UTCTimestamp; histIdx: number }> = [];
+  const shortCandidates: Array<{ time: UTCTimestamp; histIdx: number }> = [];
+
+  for (let i = 1; i < history.length - 1; i += 1) {
+    const prevPrice = history[i - 1].close;
+    const currPrice = history[i].close;
+    const nextPrice = history[i + 1].close;
+    const currTime = history[i].time as number;
+
+    if (currPrice <= prevPrice && currPrice <= nextPrice) {
+      const prevLow = priceLows[priceLows.length - 1];
+      const currMom = momentumByTime.get(currTime);
+      if (prevLow) {
+        const prevMom = momentumByTime.get(prevLow.time);
+        if (
+          currPrice < prevLow.value &&
+          currMom != null &&
+          prevMom != null &&
+          currMom > prevMom
+        ) {
+          longCandidates.push({ time: history[i].time as UTCTimestamp, histIdx: i });
+        }
+      }
+      priceLows.push({ idx: i, value: currPrice, time: currTime });
+    }
+
+    if (currPrice >= prevPrice && currPrice >= nextPrice) {
+      const prevHigh = priceHighs[priceHighs.length - 1];
+      const currMom = momentumByTime.get(currTime);
+      if (prevHigh) {
+        const prevMom = momentumByTime.get(prevHigh.time);
+        if (
+          currPrice > prevHigh.value &&
+          currMom != null &&
+          prevMom != null &&
+          currMom < prevMom
+        ) {
+          shortCandidates.push({ time: history[i].time as UTCTimestamp, histIdx: i });
+        }
+      }
+      priceHighs.push({ idx: i, value: currPrice, time: currTime });
+    }
+  }
+
+  const histIdxByTime = new Map<number, number>();
+  history.forEach((p, idx) => histIdxByTime.set(p.time as number, idx));
+
+  const longSignals: SignalEntry[] = longCandidates.map(({ time, histIdx }) => {
+    const entryPrice = history[histIdx].close;
+    const target = entryPrice * (1 + SIGNAL_TARGET_PCT);
+    const future = history.slice(histIdx + 1, histIdx + 27);
+    const isCorrect = future.length > 0 && future.some((bar) => Math.max(bar.high ?? bar.close, bar.close) >= target);
+    return { time, entryPrice, target, isCorrect, type: "long" };
+  });
+  const shortSignals: SignalEntry[] = shortCandidates.map(({ time, histIdx }) => {
+    const entryPrice = history[histIdx].close;
+    const target = entryPrice * (1 - SIGNAL_TARGET_PCT);
+    const future = history.slice(histIdx + 1, histIdx + 27);
+    const isCorrect = future.length > 0 && future.some((bar) => Math.min(bar.low ?? bar.close, bar.close) <= target);
+    return { time, entryPrice, target, isCorrect, type: "short" };
+  });
+
+  return {
+    long: longSignals,
+    short: shortSignals,
+    longAccuracy: buildSignalAccuracy(longSignals, histIdxByTime, history.length),
+    shortAccuracy: buildSignalAccuracy(shortSignals, histIdxByTime, history.length),
+  };
+}
+
+function findADXSignals(
+  history: BenchmarkHistoryPoint[],
+  adxData: IndicatorPoint[],
+  plusDIData: IndicatorPoint[],
+  minusDIData: IndicatorPoint[],
+  ema12Data: IndicatorPoint[]
+): SignalsResult {
+  const histIdxByTime = new Map<number, number>();
+  const priceByTime = new Map<number, number>();
+  const ema12ByTime = new Map<number, number>();
+  history.forEach((p, idx) => {
+    histIdxByTime.set(p.time as number, idx);
+    priceByTime.set(p.time as number, p.close);
+  });
+  ema12Data.forEach((p) => ema12ByTime.set(p.time as number, p.value));
+
+  const adxByTime = new Map<number, number>();
+  const plusDIByTime = new Map<number, number>();
+  const minusDIByTime = new Map<number, number>();
+  adxData.forEach((p) => adxByTime.set(p.time as number, p.value));
+  plusDIData.forEach((p) => plusDIByTime.set(p.time as number, p.value));
+  minusDIData.forEach((p) => minusDIByTime.set(p.time as number, p.value));
+
+  const allTimes = Array.from(
+    new Set([
+      ...adxData.map((p) => p.time as number),
+      ...plusDIData.map((p) => p.time as number),
+      ...minusDIData.map((p) => p.time as number),
+    ])
+  ).sort((a, b) => a - b);
+
+  const longCandidates: Array<{ time: UTCTimestamp; histIdx: number }> = [];
+  const shortCandidates: Array<{ time: UTCTimestamp; histIdx: number }> = [];
+
+  for (let i = 1; i < allTimes.length; i += 1) {
+    const t = allTimes[i];
+    const tPrev = allTimes[i - 1];
+    const adx = adxByTime.get(t);
+    const adxPrev = adxByTime.get(tPrev);
+    const plusDI = plusDIByTime.get(t);
+    const plusDIPrev = plusDIByTime.get(tPrev);
+    const minusDI = minusDIByTime.get(t);
+    const minusDIPrev = minusDIByTime.get(tPrev);
+    const price = priceByTime.get(t);
+    const ema12 = ema12ByTime.get(t);
+    const histIdx = histIdxByTime.get(t);
+
+    if (
+      adx == null || adxPrev == null || plusDI == null || plusDIPrev == null ||
+      minusDI == null || minusDIPrev == null || price == null || ema12 == null || histIdx == null
+    ) continue;
+
+    const plusDICrossedUp = plusDIPrev <= minusDIPrev && plusDI > minusDI;
+    const minusDICrossedUp = minusDIPrev <= plusDIPrev && minusDI > plusDI;
+    const adxAbove25 = adx > 25;
+    const adxRising = adx > adxPrev;
+    const priceAboveEma12 = price > ema12;
+    const priceBelowEma12 = price < ema12;
+
+    if (plusDICrossedUp && adxAbove25 && adxRising && priceAboveEma12) {
+      longCandidates.push({ time: t as UTCTimestamp, histIdx });
+    }
+    if (minusDICrossedUp && adxAbove25 && adxRising && priceBelowEma12) {
+      shortCandidates.push({ time: t as UTCTimestamp, histIdx });
+    }
+  }
+
+  const longSignals: SignalEntry[] = longCandidates.map(({ time, histIdx }) => {
+    const entryPrice = history[histIdx].close;
+    const target = entryPrice * (1 + SIGNAL_TARGET_PCT);
+    const future = history.slice(histIdx + 1, histIdx + 27);
+    const isCorrect =
+      future.length > 0 &&
+      future.some((bar) => Math.max(bar.high ?? bar.close, bar.close) >= target);
+    return { time, entryPrice, target, isCorrect, type: "long" };
+  });
+  const shortSignals: SignalEntry[] = shortCandidates.map(({ time, histIdx }) => {
+    const entryPrice = history[histIdx].close;
+    const target = entryPrice * (1 - SIGNAL_TARGET_PCT);
+    const future = history.slice(histIdx + 1, histIdx + 27);
+    const isCorrect =
+      future.length > 0 &&
+      future.some((bar) => Math.min(bar.low ?? bar.close, bar.close) <= target);
+    return { time, entryPrice, target, isCorrect, type: "short" };
+  });
+
+  return {
+    long: longSignals,
+    short: shortSignals,
+    longAccuracy: buildSignalAccuracy(longSignals, histIdxByTime, history.length),
+    shortAccuracy: buildSignalAccuracy(shortSignals, histIdxByTime, history.length),
+  };
 }
 
 interface TpoHistogramBin {
@@ -1172,7 +1697,7 @@ function formatPercent(value?: number) {
   return `${sign}${value.toFixed(2)}%`;
 }
 
-export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, timeScaleRightOffset, visibleLogicalRange }: IndicatorPanelProps) {
+export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, visibleLogicalRange }: IndicatorPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const priceSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
@@ -1186,6 +1711,38 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
   const [chartInitialized, setChartInitialized] = useState(false);
   const [pluginScriptReady, setPluginScriptReady] = useState(false);
   const pluginRef = useRef<any>(null);
+  const [tooltipSignal, setTooltipSignal] = useState<{
+    x: number;
+    y: number;
+    signal: SignalEntry;
+    type: "long" | "short";
+  } | null>(null);
+
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showEMASMA, setShowEMASMA] = useState(true);
+  const [showRSI, setShowRSI] = useState(true);
+  const [showADX, setShowADX] = useState(true);
+  const [showMomentum, setShowMomentum] = useState(true);
+  const [showFootprint, setShowFootprint] = useState(false);
+
+  const [indicatorOrder, setIndicatorOrder] = useState<string[]>(
+    ["ema-sma", "rsi", "adx", "momentum", "footprint"]
+  );
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+
+  const moveIndicator = (fromId: string, toId: string) => {
+    if (fromId === toId) return;
+    setIndicatorOrder((prev) => {
+      const arr = [...prev];
+      const fi = arr.indexOf(fromId);
+      const ti = arr.indexOf(toId);
+      if (fi < 0 || ti < 0) return prev;
+      arr.splice(fi, 1);
+      arr.splice(ti, 0, fromId);
+      return arr;
+    });
+  };
 
   useEffect(() => {
     if (window.__LIGHTWEIGHT_CHART_PLUGIN_LOADED) {
@@ -1246,11 +1803,12 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
         borderColor: "#363a59",
         scaleMargins: { top: 0.05, bottom: 0.2 },
       },
+      localization: CHART_LOCALIZATION,
       timeScale: {
         borderColor: "#363a59",
         timeVisible: true,
         secondsVisible: false,
-        rightOffset: timeScaleRightOffset ?? DEFAULT_RIGHT_OFFSET,
+        rightOffset: DEFAULT_RIGHT_OFFSET,
         tickMarkFormatter: localTickMarkFormatter,
       },
       crosshair: {
@@ -1258,7 +1816,7 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
         horzLine: { color: "#3d51ff", width: 1 },
       },
       width: Math.max(container.clientWidth, 300),
-      height: 240,
+      height: INDICATOR_PANEL_MIN_HEIGHT,
     });
 
     chartRef.current = chart;
@@ -1310,40 +1868,56 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
       htSeriesRef.current = null;
       setChartInitialized(false);
     };
-  }, []);
+  // Re-run when showEMASMA toggles so the chart is recreated after its container remounts
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showEMASMA]);
+
+  const INDICATOR_REFRESH_MS = 15_000;
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
+    let isFirstLoad = true;
 
-    const { resolution: resStr, rangeSeconds, resolutionSeconds } = resolutionToParams(resolution ?? "1D");
-    fetchPythBenchmarkHistory(symbol, {
-      resolution: resStr,
-      rangeSeconds,
-      symbolOverride: tradingViewSymbol,
-    })
-      .then((points) => {
-        if (!cancelled) {
-          if (points.length >= SMA_LENGTH) {
-            setHistory(points);
-          } else {
-            setHistory(generateFallbackData(symbol, resolutionSeconds));
+    const load = () => {
+      if (isFirstLoad) {
+        setLoading(true);
+        setError(null);
+      }
+      const { resolution: resStr, rangeSeconds, resolutionSeconds } = resolutionToParams(resolution ?? "1D");
+      fetchPythBenchmarkHistory(symbol, {
+        resolution: resStr,
+        rangeSeconds,
+        symbolOverride: tradingViewSymbol,
+      })
+        .then((points) => {
+          if (!cancelled) {
+            if (points.length >= SMA_LENGTH) {
+              setHistory(points);
+            } else {
+              setHistory(generateFallbackData(symbol, resolutionSeconds));
+            }
           }
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setHistory(generateFallbackData(symbol, resolutionSeconds));
-          setError(null);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setHistory(generateFallbackData(symbol, resolutionSeconds));
+            setError(null);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setLoading(false);
+            isFirstLoad = false;
+          }
+        });
+    };
+
+    load();
+    const timer = setInterval(load, INDICATOR_REFRESH_MS);
 
     return () => {
       cancelled = true;
+      clearInterval(timer);
     };
   }, [symbol, tradingViewSymbol, resolution]);
 
@@ -1378,42 +1952,98 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
   const latestEma26 = ema26Data[ema26Data.length - 1]?.value;
   const latestRsi = rsi14Data[rsi14Data.length - 1]?.value;
   const latestMomentum = momentumData[momentumData.length - 1]?.value;
-  const prevEma12 = ema12Data[ema12Data.length - 2];
-  const prevEma26 = ema26Data[ema26Data.length - 2];
-  const currEma12 = ema12Data[ema12Data.length - 1];
-  const currEma26 = ema26Data[ema26Data.length - 1];
-  const goldenCross =
-    prevEma12 &&
-    prevEma26 &&
-    currEma12 &&
-    currEma26 &&
-    prevEma12.value <= prevEma26.value &&
-    currEma12.value > currEma26.value;
-  const deathCross =
-    prevEma12 &&
-    prevEma26 &&
-    currEma12 &&
-    currEma26 &&
-    prevEma12.value >= prevEma26.value &&
-    currEma12.value < currEma26.value;
-  const priceAboveSma = latestPrice && latestSma ? latestPrice > latestSma : false;
-  const priceBelowSma = latestPrice && latestSma ? latestPrice < latestSma : false;
-  const emaAboveSma =
-    currEma12 && currEma26 && latestSma ? currEma12.value > latestSma && currEma26.value > latestSma : false;
-  const emaBelowSma =
-    currEma12 && currEma26 && latestSma ? currEma12.value < latestSma && currEma26.value < latestSma : false;
-  const nearSma = latestPrice && latestSma ? Math.abs(latestPrice - latestSma) <= latestSma * 0.01 : false;
-  const nearEma12 = latestPrice && currEma12 ? Math.abs(latestPrice - currEma12.value) <= currEma12.value * 0.01 : false;
-  const pullbackLong = nearSma || nearEma12;
-  const pullbackShort = nearSma || nearEma12;
-  const longSignal =
-    goldenCross && priceAboveSma && emaAboveSma && pullbackLong
-      ? { time: currEma12.time, price: latestPrice ?? currEma12.value }
-      : null;
-  const shortSignal =
-    deathCross && priceBelowSma && emaBelowSma && pullbackShort
-      ? { time: currEma12.time, price: latestPrice ?? currEma12.value }
-      : null;
+  const priceSignals = useMemo(
+    () => findCrossSignals(history, smaData, ema12Data, ema26Data),
+    [history, smaData, ema12Data, ema26Data]
+  );
+  const rsiDivergenceSignals = useMemo(
+    () => findRsiDivergenceSignals(history, rsi14Data, rsi28Data),
+    [history, rsi14Data, rsi28Data]
+  );
+  const rsiSeriesSets = useMemo(
+    () => [
+      { label: "RSI(14)", color: "#38bdf8", data: rsi14Data },
+      { label: "RSI(28)", color: "#22c55e", data: rsi28Data },
+    ],
+    [rsi14Data, rsi28Data]
+  );
+  const [stableRsiSignals, setStableRsiSignals] = useState<SignalsResult>(() => ({
+    long: [],
+    short: [],
+    longAccuracy: { correct: 0, total: 0, pct: 0 },
+    shortAccuracy: { correct: 0, total: 0, pct: 0 },
+  }));
+  useEffect(() => {
+    if (rsiDivergenceSignals.long.length > 0 || rsiDivergenceSignals.short.length > 0) {
+      setStableRsiSignals(rsiDivergenceSignals);
+    }
+  }, [rsiDivergenceSignals]);
+
+  const adxSignals = useMemo(
+    () => findADXSignals(history, adxData, plusDIData, minusDIData, ema12Data),
+    [history, adxData, plusDIData, minusDIData, ema12Data]
+  );
+  const [stableADXSignals, setStableADXSignals] = useState<SignalsResult>(() => ({
+    long: [],
+    short: [],
+    longAccuracy: { correct: 0, total: 0, pct: 0 },
+    shortAccuracy: { correct: 0, total: 0, pct: 0 },
+  }));
+  useEffect(() => {
+    if (adxSignals.long.length > 0 || adxSignals.short.length > 0) {
+      setStableADXSignals(adxSignals);
+    }
+  }, [adxSignals]);
+
+  const latestADX = adxData[adxData.length - 1]?.value;
+  const adxColorByStrength =
+    latestADX == null ? "#a78bfa" :
+    latestADX < 20 ? "#94a3b8" :
+    latestADX < 40 ? "#3b82f6" :
+    "#a78bfa";
+  const adxSeriesSets = useMemo(
+    () => [
+      { label: `ADX(${ADX_LENGTH})`, color: adxColorByStrength, data: adxData },
+      { label: "+DI", color: "#22c55e", data: plusDIData },
+      { label: "-DI", color: "#f87171", data: minusDIData },
+    ],
+    [adxData, plusDIData, minusDIData, adxColorByStrength]
+  );
+
+  const momentumDivergenceSignals = useMemo(
+    () => findMomentumDivergenceSignals(history, momentumData),
+    [history, momentumData]
+  );
+  const [stableMomentumSignals, setStableMomentumSignals] = useState<SignalsResult>(() => ({
+    long: [],
+    short: [],
+    longAccuracy: { correct: 0, total: 0, pct: 0 },
+    shortAccuracy: { correct: 0, total: 0, pct: 0 },
+  }));
+  useEffect(() => {
+    if (momentumDivergenceSignals.long.length > 0 || momentumDivergenceSignals.short.length > 0) {
+      setStableMomentumSignals(momentumDivergenceSignals);
+    }
+  }, [momentumDivergenceSignals]);
+
+  const momentumExtremeLevels = useMemo(() => {
+    if (!momentumData.length) return { high: Infinity, low: -Infinity };
+    const values = momentumData.map((p) => p.value).sort((a, b) => a - b);
+    const p95Idx = Math.floor(values.length * 0.95);
+    const p5Idx = Math.floor(values.length * 0.05);
+    return {
+      high: values[Math.min(p95Idx, values.length - 1)] ?? Infinity,
+      low: values[Math.max(p5Idx, 0)] ?? -Infinity,
+    };
+  }, [momentumData]);
+  const momentumOverstretched =
+    latestMomentum != null &&
+    (latestMomentum >= momentumExtremeLevels.high || latestMomentum <= momentumExtremeLevels.low);
+
+  const momentumSeriesSets = useMemo(
+    () => [{ label: `Momentum(${MOMENTUM_LENGTH})`, color: "#0ea5e9", data: momentumData }],
+    [momentumData]
+  );
 
   const smaDelta = latestPrice && latestSma ? ((latestSma - latestPrice) / latestPrice) * 100 : undefined;
   const ema12Delta = latestPrice && latestEma12 ? ((latestEma12 - latestPrice) / latestPrice) * 100 : undefined;
@@ -1477,27 +2107,27 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
   const signalMarkers = useMemo<SeriesMarker<Time>[]>(
     () => {
       const markers: SeriesMarker<Time>[] = [];
-      if (longSignal) {
+      priceSignals.long.forEach((s) => {
         markers.push({
-          time: longSignal.time,
+          time: s.time,
           position: "belowBar",
-          color: "#22c55e",
-          shape: "arrowUp",
-          text: "Long",
+          color: "#00C853",
+          shape: "circle",
+          text: "LONG",
         });
-      }
-      if (shortSignal) {
+      });
+      priceSignals.short.forEach((s) => {
         markers.push({
-          time: shortSignal.time,
+          time: s.time,
           position: "aboveBar",
-          color: "#ef4444",
-          shape: "arrowDown",
-          text: "Short",
+          color: "#F44336",
+          shape: "circle",
+          text: "SHORT",
         });
-      }
-      return markers;
+      });
+      return markers.sort((a, b) => (a.time as number) - (b.time as number));
     },
-    [longSignal, shortSignal]
+    [priceSignals]
   );
 
   const lastUpdate = history[history.length - 1]
@@ -1509,18 +2139,25 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
 
   useEffect(() => {
     if (!chartRef.current) return;
-    priceSeriesRef.current?.setData(priceData);
-    smaSeriesRef.current?.setData(smaData);
-    ema12SeriesRef.current?.setData(ema12Data);
-    ema26SeriesRef.current?.setData(ema26Data);
+    const sortAsc = <T extends { time: UTCTimestamp }>(arr: T[]) =>
+      [...arr].sort((a, b) => (a.time as number) - (b.time as number));
+    priceSeriesRef.current?.setData(sortAsc(priceData));
+    smaSeriesRef.current?.setData(sortAsc(smaData));
+    ema12SeriesRef.current?.setData(sortAsc(ema12Data));
+    ema26SeriesRef.current?.setData(sortAsc(ema26Data));
     chartRef.current.timeScale().fitContent();
     chartRef.current.priceScale("right").applyOptions({ autoScale: true });
-  }, [priceData, smaData, ema12Data, ema26Data]);
+  // chartInitialized included so data is re-applied after chart is recreated on toggle
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [priceData, smaData, ema12Data, ema26Data, chartInitialized]);
 
   useEffect(() => {
     if (!htSeriesRef.current || !htLineData.length) return;
-    htSeriesRef.current.setData(htLineData);
-  }, [htLineData]);
+    const sorted = [...htLineData].sort((a, b) => (a.time as number) - (b.time as number));
+    htSeriesRef.current.setData(sorted);
+  // chartInitialized included so HT data is re-applied after chart is recreated on toggle
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [htLineData, chartInitialized]);
 
   useEffect(() => {
     if (!priceSeriesRef.current) return;
@@ -1528,11 +2165,34 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
   }, [signalMarkers]);
 
   useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !chartInitialized) return;
+    const handler = (param: any) => {
+      if (!param.time || !param.point) {
+        setTooltipSignal(null);
+        return;
+      }
+      const t = param.time as number;
+      const longSig = priceSignals.long.find((s) => (s.time as number) === t);
+      const shortSig = priceSignals.short.find((s) => (s.time as number) === t);
+      if (longSig) {
+        setTooltipSignal({ x: param.point.x, y: param.point.y, signal: longSig, type: "long" });
+      } else if (shortSig) {
+        setTooltipSignal({ x: param.point.x, y: param.point.y, signal: shortSig, type: "short" });
+      } else {
+        setTooltipSignal(null);
+      }
+    };
+    chart.subscribeCrosshairMove(handler);
+    return () => { chart.unsubscribeCrosshairMove(handler); };
+  }, [priceSignals, chartInitialized]);
+
+  useEffect(() => {
     if (!chartRef.current) return;
     chartRef.current.timeScale().applyOptions({
-      rightOffset: timeScaleRightOffset ?? DEFAULT_RIGHT_OFFSET,
+      rightOffset: DEFAULT_RIGHT_OFFSET,
     });
-  }, [timeScaleRightOffset]);
+  }, []);
 
   useEffect(() => {
     if (!chartRef.current || !visibleLogicalRange) return;
@@ -1543,8 +2203,188 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
   }, [visibleLogicalRange]);
 
   return (
+    <>
+      {/* ══════════════════════════════════════════════
+          Fixed left-edge trigger tab — always visible
+          ══════════════════════════════════════════════ */}
+      <button
+        type="button"
+        onClick={() => setSidebarOpen((o) => !o)}
+        title="Toggle indicator list"
+        className="fixed left-0 z-[200] flex flex-col items-center justify-center gap-1.5 transition-all duration-200"
+        style={{
+          top: "50%",
+          transform: "translateY(-50%)",
+          width: 28,
+          paddingTop: 14,
+          paddingBottom: 14,
+          borderRadius: "0 10px 10px 0",
+          background: sidebarOpen
+            ? "linear-gradient(180deg,#3d51ff 0%,#2d3fd0 100%)"
+            : "linear-gradient(180deg,#1a1d2e 0%,#141625 100%)",
+          border: "1px solid",
+          borderLeft: "none",
+          borderColor: sidebarOpen ? "#3d51ff" : "#363a59",
+          boxShadow: sidebarOpen
+            ? "2px 0 16px rgba(61,81,255,0.35)"
+            : "2px 0 8px rgba(0,0,0,0.4)",
+        }}
+      >
+        {/* stacked dot-lines icon */}
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={sidebarOpen ? "#fff" : "#94a3b8"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="8" y1="6"  x2="21" y2="6"  />
+          <line x1="8" y1="12" x2="21" y2="12" />
+          <line x1="8" y1="18" x2="21" y2="18" />
+          <circle cx="3" cy="6"  r="1.2" fill={sidebarOpen ? "#fff" : "#94a3b8"} stroke="none" />
+          <circle cx="3" cy="12" r="1.2" fill={sidebarOpen ? "#fff" : "#94a3b8"} stroke="none" />
+          <circle cx="3" cy="18" r="1.2" fill={sidebarOpen ? "#fff" : "#94a3b8"} stroke="none" />
+        </svg>
+        {/* rotated label */}
+        <span
+          className="select-none font-semibold"
+          style={{
+            writingMode: "vertical-rl",
+            transform: "rotate(180deg)",
+            fontSize: 9,
+            letterSpacing: "0.18em",
+            textTransform: "uppercase",
+            color: sidebarOpen ? "#c7d2fe" : "#475569",
+          }}
+        >
+          Chart
+        </span>
+      </button>
+
+      {/* ══════════════════════
+          Fixed backdrop
+          ══════════════════════ */}
+      <div
+        className="fixed inset-0 z-[150] transition-opacity duration-300"
+        style={{
+          background: "rgba(0,0,0,0.45)",
+          backdropFilter: "blur(3px)",
+          opacity: sidebarOpen ? 1 : 0,
+          pointerEvents: sidebarOpen ? "auto" : "none",
+        }}
+        onClick={() => setSidebarOpen(false)}
+      />
+
+      {/* ══════════════════════════
+          Fixed left sidebar panel
+          ══════════════════════════ */}
+      <div
+        className="fixed inset-y-0 left-0 z-[180] flex flex-col border-r border-[#252840] shadow-2xl transition-transform duration-300 ease-out"
+        style={{
+          width: 264,
+          background: "linear-gradient(160deg,#0b0d1e 0%,#0d0f22 100%)",
+          transform: sidebarOpen ? "translateX(0)" : "translateX(-100%)",
+        }}
+      >
+        {/* sidebar header */}
+        <div className="flex items-center justify-between border-b border-[#1a1d30] px-5 py-5">
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#3d51ff]/20">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#818cf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+              </svg>
+            </span>
+            <span className="text-[11px] font-semibold uppercase tracking-[0.3em] text-slate-300">
+              Indicators
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(false)}
+            className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#1a1d2e] text-slate-500 hover:text-white transition-colors duration-150"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+
+        {/* description */}
+        <p className="px-5 pt-3 pb-1 text-[10px] text-slate-600 uppercase tracking-widest">
+          Toggle visibility
+        </p>
+
+        {/* toggle list — sorted by indicatorOrder, rows are draggable */}
+        <div className="flex flex-col gap-0.5 px-3 pb-3">
+          {(
+            [
+              { id: "ema-sma",   label: "EMA & SMA Chart",           value: showEMASMA,   onChange: setShowEMASMA,   color: "#a78bfa", note: undefined },
+              { id: "rsi",       label: "RSI Chart",                  value: showRSI,      onChange: setShowRSI,      color: "#38bdf8", note: undefined },
+              { id: "adx",       label: "ADX Chart",                  value: showADX,      onChange: setShowADX,      color: "#fb7185", note: undefined },
+              { id: "momentum",  label: `Momentum (${MOMENTUM_LENGTH})`, value: showMomentum, onChange: setShowMomentum, color: "#0ea5e9", note: undefined },
+              { id: "footprint", label: "Footprint History",          value: showFootprint, onChange: setShowFootprint, color: "#4ade80", note: "Feature under development." },
+            ] as Array<{ id: string; label: string; value: boolean; onChange: (v: boolean) => void; color: string; note?: string }>
+          )
+            .sort((a, b) => indicatorOrder.indexOf(a.id) - indicatorOrder.indexOf(b.id))
+            .map(({ id, label, value, onChange, color, note }) => (
+            <div
+              key={id}
+              draggable
+              onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; setDraggingId(id); }}
+              onDragOver={(e) => { e.preventDefault(); if (id !== draggingId) setDragOverId(id); }}
+              onDrop={(e) => { e.preventDefault(); if (draggingId) moveIndicator(draggingId, id); setDraggingId(null); setDragOverId(null); }}
+              onDragEnd={() => { setDraggingId(null); setDragOverId(null); }}
+              className="group relative flex items-center justify-between gap-2 rounded-xl px-2 py-[10px] transition-all duration-150 cursor-pointer select-none"
+              style={{
+                opacity: draggingId === id ? 0.4 : 1,
+                background: dragOverId === id && draggingId !== id ? "rgba(61,81,255,0.13)" : undefined,
+                outline: dragOverId === id && draggingId !== id ? "1px solid rgba(61,81,255,0.4)" : "1px solid transparent",
+                outlineOffset: -1,
+              }}
+              onClick={() => onChange(!value)}
+            >
+              {/* grip icon */}
+              <div
+                className="flex shrink-0 cursor-grab active:cursor-grabbing items-center justify-center text-slate-700 group-hover:text-slate-500 transition-colors duration-150"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <svg width="9" height="13" viewBox="0 0 9 13" fill="currentColor">
+                  <circle cx="2" cy="2"   r="1.3"/><circle cx="7" cy="2"   r="1.3"/>
+                  <circle cx="2" cy="6.5" r="1.3"/><circle cx="7" cy="6.5" r="1.3"/>
+                  <circle cx="2" cy="11"  r="1.3"/><circle cx="7" cy="11"  r="1.3"/>
+                </svg>
+              </div>
+
+              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                <span
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ background: value ? color : "#2a2d4a", boxShadow: value ? `0 0 6px ${color}80` : "none", transition: "all 0.3s" }}
+                />
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <span
+                    className="truncate text-[13px] leading-none transition-colors duration-200"
+                    style={{ color: value ? "#e2e8f0" : "#475569" }}
+                  >
+                    {label}
+                  </span>
+                  {note && (
+                    <span className="text-[10px] leading-none text-amber-500/70 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                      {note}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <IOSToggle value={value} onChange={onChange} />
+            </div>
+          ))}
+        </div>
+
+        {/* sidebar footer */}
+        <div className="mt-auto border-t border-[#1a1d30] px-5 py-4">
+          <p className="text-[10px] leading-relaxed text-slate-700">
+            Drag <span className="text-slate-600">⠿</span> rows to reorder · click outside to close
+          </p>
+        </div>
+      </div>
+
     <div className="mt-6 px-6 pb-6">
       <div className="bg-[#0f111f] rounded-2xl border border-[#363a59] p-5 shadow-xl shadow-black/20">
+        {/* ── Panel header ── */}
         <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.4em] text-slate-500 mb-3">
           <span>Indicators</span>
           <span className="text-slate-400 text-[10px] normal-case tracking-normal">
@@ -1552,121 +2392,297 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
           </span>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-left text-sm mb-4">
-          <div className="rounded-xl border border-[#363a59] bg-[#121421] p-3">
+          <div className="rounded-xl border border-[#363a59] bg-[#121421] p-3 min-h-[120px]">
             <p className="text-[10px] uppercase text-slate-400 mb-1">SMA ({SMA_LENGTH})</p>
             <div className="text-lg font-semibold text-white">${latestSma?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? "—"}</div>
             <p className="text-[11px] text-slate-500">{formatPercent(smaDelta)} vs price</p>
           </div>
-          <div className="rounded-xl border border-[#363a59] bg-[#121421] p-3">
+          <div className="rounded-xl border border-[#363a59] bg-[#121421] p-3 min-h-[120px]">
             <p className="text-[10px] uppercase text-slate-400 mb-1">EMA ({EMA_SHORT_LENGTH})</p>
             <div className="text-lg font-semibold text-white">${latestEma12?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? "—"}</div>
             <p className="text-[11px] text-slate-500">{formatPercent(ema12Delta)} vs price</p>
           </div>
-          <div className="rounded-xl border border-[#363a59] bg-[#121421] p-3">
+          <div className="rounded-xl border border-[#363a59] bg-[#121421] p-3 min-h-[120px]">
             <p className="text-[10px] uppercase text-slate-400 mb-1">EMA ({EMA_MID_LENGTH})</p>
             <div className="text-lg font-semibold text-white">${latestEma14?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? "—"}</div>
             <p className="text-[11px] text-slate-500">{formatPercent(ema14Delta)} vs price</p>
           </div>
-          <div className="rounded-xl border border-[#363a59] bg-[#121421] p-3">
+          <div className="rounded-xl border border-[#363a59] bg-[#121421] p-3 min-h-[120px]">
             <p className="text-[10px] uppercase text-slate-400 mb-1">RSI ({RSI_LENGTH})</p>
             <div className="text-lg font-semibold text-white">{latestRsi?.toFixed(1) ?? "—"}</div>
             <p className="text-[11px] text-slate-500">{rsiLabel}</p>
           </div>
-          <div className="rounded-xl border border-[#363a59] bg-[#121421] p-3">
+          <div className="rounded-xl border border-[#363a59] bg-[#121421] p-3 min-h-[120px]">
             <p className="text-[10px] uppercase text-slate-400 mb-1">Momentum ({MOMENTUM_LENGTH})</p>
             <div className="text-lg font-semibold text-white">{latestMomentum?.toFixed(2) ?? "—"}</div>
             <p className="text-[11px] text-slate-500">{momentumLabel}</p>
           </div>
         </div>
-        <div className="relative min-h-[240px] w-full rounded-xl overflow-hidden border border-[#363a59] bg-[#0d0f18]">
-          <div id="chartContainer" className="relative w-full h-[240px] min-w-[300px]">
-            <div id="chart" ref={containerRef} className="w-full h-[240px]" />
-            <canvas
-              id="overlayCanvas"
-              className="absolute inset-0 pointer-events-none"
-              style={{ zIndex: -1 }}
-            />
-            <canvas
-              id="overlayCanvasVP"
-              className="absolute inset-0 pointer-events-none"
-              style={{ zIndex: -2 }}
-            />
-          </div>
-          <div className="absolute right-[0.5rem] top-4 hidden flex-col items-end gap-1 rounded-lg bg-black/30 px-3 py-2 text-right text-[11px] font-semibold text-white backdrop-blur sm:flex">
-            {legendItems.map((item) => (
-              <div key={item.label} className="flex items-center gap-1" style={{ letterSpacing: "-0.05em" }}>
-                <span
-                  className="block h-2.5 w-2.5 rounded-full"
-                  style={{ background: item.color }}
-                />
-                <span className="text-slate-300">{item.label}</span>
-                <span className="text-[13px] text-white">{item.value?.toFixed(2) ?? "—"}</span>
-              </div>
-            ))}
-          </div>
-          {loading && (
-            <div className="absolute inset-0 flex items-center justify-center bg-[#0d0f18]/80 text-xs uppercase tracking-[0.3em] text-slate-400">
-              Loading...
-            </div>
-          )}
-          {error && (
-            <div className="absolute inset-0 flex items-center justify-center px-6 text-center text-xs text-rose-400">
-              {error}
-            </div>
-          )}
-        </div>
         <div className="mt-4 flex flex-col gap-3">
-          <MultiSeriesSubChart
-            title="RSI Chart"
-            seriesSets={[
-              { label: "RSI(14)", color: "#38bdf8", data: rsi14Data },
-              { label: "RSI(28)", color: "#22c55e", data: rsi28Data },
-            ]}
-            rightOffset={30}
-            zones={[
-              { value: 100, color: "#facc15", lineStyle: LineStyle.Dotted },
-              { value: 70, color: "#fde047", lineStyle: LineStyle.Dashed },
-              { value: 50, color: "#94a3b8", lineStyle: LineStyle.Dashed },
-              { value: 30, color: "#38bdf8", lineStyle: LineStyle.Dashed },
-              { value: 0, color: "#0ea5e9", lineStyle: LineStyle.Dotted },
-            ]}
-            zoneGradient="linear-gradient(to top, rgba(14,165,233,0.25) 0%, rgba(59,130,246,0.18) 30%, rgba(148,163,184,0.1) 50%, rgba(251,146,60,0.2) 80%, rgba(248,113,113,0.2) 100%)"
-          />
-          <MultiSeriesSubChart
-            title="ADX Chart"
-            seriesSets={[
-              { label: `ADX(${ADX_LENGTH})`, color: "#a78bfa", data: adxData },
-              { label: "+DI", color: "#22c55e", data: plusDIData },
-              { label: "-DI", color: "#f87171", data: minusDIData },
-            ]}
-            rightOffset={30}
-            zones={[
-              { value: 100, color: "#facc15", lineStyle: LineStyle.Dotted },
-              { value: 50, color: "#fde047", lineStyle: LineStyle.Dashed },
-              { value: 25, color: "#94a3b8", lineStyle: LineStyle.Dashed },
-              { value: 0, color: "#0ea5e9", lineStyle: LineStyle.Dotted },
-            ]}
-            zoneGradient="linear-gradient(to top, rgba(14,165,233,0.15) 0%, rgba(148,163,184,0.08) 25%, rgba(251,146,60,0.15) 50%, rgba(248,113,113,0.2) 100%)"
-          />
-          <IndicatorSubChart
-            title={`Momentum (${MOMENTUM_LENGTH})`}
-            legend="Momentum"
-            series={momentumData}
-            color="#0ea5e9"
-            fullWidth
-            rightOffset={6}
-          />
-          <FootprintHistoryChart
-            polkadotSymbol={symbol}
-            priceBin={footprintBin}
-            lineColor={FOOTPRINT_LINE_COLOR}
-            displayPrice={latestPrice}
-            numBars={18}
-            barSeconds={tvResolutionToSeconds(resolution ?? "1")}
-            resolution={resolution ?? "1m"}
-          />
+          {indicatorOrder.map((id) => {
+            const isOver = dragOverId === id && draggingId !== id;
+            const isDragging = draggingId === id;
+            const displayLabel = INDICATOR_LABELS[id] ?? "Indicator";
+            const questionText = `Explain what the ${displayLabel} is signaling right now.`;
+
+            /** Shared drag-wrapper around each chart card */
+            const wrap = (content: React.ReactNode) => (
+              <div
+                key={id}
+                draggable
+                onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; setDraggingId(id); }}
+                onDragOver={(e) => { e.preventDefault(); if (id !== draggingId) setDragOverId(id); }}
+                onDrop={(e) => { e.preventDefault(); if (draggingId) moveIndicator(draggingId, id); setDraggingId(null); setDragOverId(null); }}
+                onDragEnd={() => { setDraggingId(null); setDragOverId(null); }}
+                className="group/card relative"
+                style={{
+                  opacity: isDragging ? 0.38 : 1,
+                  outline: isOver ? "2px solid #3d51ff" : "2px solid transparent",
+                  outlineOffset: 2,
+                  borderRadius: 16,
+                  transition: "opacity 0.2s, outline-color 0.15s",
+                  overflow: "visible",
+                }}
+              >
+                {/* centered drag handle strip — visible on card hover */}
+                <div
+                  className="absolute top-0 left-1/2 -translate-x-1/2 z-20 opacity-0 group-hover/card:opacity-100 transition-opacity duration-200 flex items-center gap-1.5 px-4 py-[5px] rounded-b-xl cursor-grab active:cursor-grabbing select-none"
+                  style={{ background: "rgba(61,81,255,0.13)", border: "1px solid rgba(61,81,255,0.25)", borderTop: "none" }}
+                  title="Drag to reorder"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <svg width="14" height="10" viewBox="0 0 14 10" fill="rgba(148,163,184,0.7)">
+                    <circle cx="2"  cy="2" r="1.4"/><circle cx="7"  cy="2" r="1.4"/><circle cx="12" cy="2" r="1.4"/>
+                    <circle cx="2"  cy="8" r="1.4"/><circle cx="7"  cy="8" r="1.4"/><circle cx="12" cy="8" r="1.4"/>
+                  </svg>
+                  <span style={{ fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(148,163,184,0.6)" }}>drag</span>
+                </div>
+                {content}
+                <AddToChatbotButton indicatorId={id} label={displayLabel} question={questionText} />
+              </div>
+            );
+
+            if (id === "ema-sma" && showEMASMA) return wrap(
+          <div className="rounded-2xl border border-[#363a59] bg-[#080a14] p-4 text-sm w-full">
+            <div className="flex items-center justify-between pb-3 text-[10px] uppercase tracking-[0.4em] text-slate-500">
+              <span>EMA &amp; SMA Chart</span>
+              <span className="text-slate-400 text-[10px] normal-case tracking-normal">
+                {symbol} · {resolution ?? "1D"} · {lastUpdate}
+              </span>
+            </div>
+            <div
+              className="rounded-xl border border-[#1d2142] bg-[#0d0f18] overflow-hidden relative"
+              style={{ height: INDICATOR_PANEL_MIN_HEIGHT }}
+            >
+              <div
+                id="chartContainer"
+                className="relative w-full min-w-[300px]"
+                style={{ height: INDICATOR_PANEL_MIN_HEIGHT }}
+              >
+                <div
+                  id="chart"
+                  ref={containerRef}
+                  className="w-full"
+                  style={{ height: INDICATOR_PANEL_MIN_HEIGHT }}
+                />
+                <canvas
+                  id="overlayCanvas"
+                  className="absolute inset-0 pointer-events-none"
+                  style={{ zIndex: -1 }}
+                />
+                <canvas
+                  id="overlayCanvasVP"
+                  className="absolute inset-0 pointer-events-none"
+                  style={{ zIndex: -2 }}
+                />
+              </div>
+              <div className="absolute right-[0.5rem] top-4 hidden flex-col items-end gap-1 rounded-lg bg-black/30 px-3 py-2 text-right text-[11px] font-semibold text-white backdrop-blur sm:flex">
+                {legendItems.map((item) => (
+                  <div key={item.label} className="flex items-center gap-1" style={{ letterSpacing: "-0.05em" }}>
+                    <span
+                      className="block h-2.5 w-2.5 rounded-full"
+                      style={{ background: item.color }}
+                    />
+                    <span className="text-slate-300">{item.label}</span>
+                    <span className="text-[13px] text-white">{item.value?.toFixed(2) ?? "—"}</span>
+                  </div>
+                ))}
+              </div>
+              {loading && (
+                <div className="absolute inset-0 flex items-center justify-center bg-[#0d0f18]/80 text-xs uppercase tracking-[0.3em] text-slate-400">
+                  Loading...
+                </div>
+              )}
+              {error && (
+                <div className="absolute inset-0 flex items-center justify-center px-6 text-center text-xs text-rose-400">
+                  {error}
+                </div>
+              )}
+              {tooltipSignal && (() => {
+                const isLong = tooltipSignal.type === "long";
+                const acc = isLong ? priceSignals.longAccuracy : priceSignals.shortAccuracy;
+                const fmt = (v: number) =>
+                  v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                const containerW = containerRef.current?.clientWidth ?? 400;
+                const tooltipW = 220;
+                const rawLeft = tooltipSignal.x + 14;
+                const left = rawLeft + tooltipW > containerW ? tooltipSignal.x - tooltipW - 6 : rawLeft;
+                const top = Math.max(4, Math.min(tooltipSignal.y - 30, 170));
+                const signalTime = tooltipSignal.signal.time as number;
+                const rsiAtSignal = rsi14Data.find((p) => (p.time as number) === signalTime)?.value ??
+                  (() => {
+                    const sorted = [...rsi14Data].sort(
+                      (a, b) =>
+                        Math.abs((a.time as number) - signalTime) - Math.abs((b.time as number) - signalTime)
+                    );
+                    return sorted[0]?.value;
+                  })();
+                const longGradient = "linear-gradient(135deg, rgba(0,200,83,0.25) 0%, rgba(76,175,80,0.4) 100%)";
+                const shortGradient = "linear-gradient(135deg, rgba(244,67,54,0.2) 0%, rgba(229,57,53,0.35) 100%)";
+                return (
+                  <div
+                    className="absolute z-50 pointer-events-none select-none rounded-xl border border-[#363a59] p-3 text-xs text-white shadow-2xl backdrop-blur"
+                    style={{
+                      left,
+                      top,
+                      width: tooltipW,
+                      background: isLong ? longGradient : shortGradient,
+                      borderColor: isLong ? "rgba(0,200,83,0.5)" : "rgba(244,67,54,0.5)",
+                    }}
+                  >
+                    <div
+                      className="mb-2 flex items-center gap-1.5 font-semibold text-[13px] uppercase tracking-wider"
+                      style={{ color: isLong ? "#00C853" : "#F44336" }}
+                    >
+                      <span>{isLong ? "●" : "●"}</span>
+                      <span>Signal Type: {isLong ? "Long" : "Short"}</span>
+                    </div>
+              <div className="flex justify-between mb-1 text-[12px]">
+                <span className="text-slate-400">Signal Time</span>
+                <span className="font-mono">
+                  {new Date((tooltipSignal.signal.time as number) * 1000).toLocaleString()}
+                </span>
+              </div>
+              <div className="flex justify-between mb-1 text-[12px]">
+                <span className="text-slate-400">Price</span>
+                <span className="font-mono">${fmt(tooltipSignal.signal.entryPrice)}</span>
+              </div>
+                    <div className="flex justify-between mb-1 text-[12px]">
+                      <span className="text-slate-400">RSI(14)</span>
+                      <span className="font-mono">{rsiAtSignal != null ? rsiAtSignal.toFixed(2) : "—"}</span>
+                    </div>
+                    <div className="flex justify-between mb-2 text-[12px]">
+                      <span className="text-slate-400">Leverage (Suggest)</span>
+                      <span className="font-mono font-semibold" style={{ color: isLong ? "#00C853" : "#F44336" }}>
+                        10x
+                      </span>
+                    </div>
+                    <div className="border-t border-[#2a2d4a] pt-2">
+                      <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1.5">
+                        {isLong ? "Long" : "Short"} Win Rate
+                      </div>
+                      {acc.total === 0 ? (
+                        <div className="text-slate-500 text-[11px]">Not enough historical data</div>
+                      ) : (
+                        <>
+                          <div className="flex justify-between mb-0.5">
+                            <span className="text-slate-400">Correct / Total</span>
+                            <span>{acc.correct} / {acc.total}</span>
+                          </div>
+                          <div className="flex justify-between mb-1">
+                            <span className="text-slate-400">Win Rate</span>
+                            <span
+                              className="font-semibold"
+                              style={{ color: acc.pct >= 50 ? "#4ade80" : "#f87171" }}
+                            >
+                              {acc.pct.toFixed(1)}%
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-600">
+                            Target ±{(SIGNAL_TARGET_PCT * 100).toFixed(0)}% within 26 bars
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+            ); // end ema-sma wrap
+
+            if (id === "rsi" && showRSI) return wrap(
+              <MultiSeriesSubChart
+                title="RSI Chart"
+                seriesSets={rsiSeriesSets}
+                visibleLogicalRange={visibleLogicalRange}
+                logicalOffset={RSI_LENGTH}
+                zones={[
+                  { value: 100, color: "#facc15", lineStyle: LineStyle.Dotted },
+                  { value: 70, color: "#fde047", lineStyle: LineStyle.Dashed },
+                  { value: 50, color: "#94a3b8", lineStyle: LineStyle.Dashed },
+                  { value: 30, color: "#38bdf8", lineStyle: LineStyle.Dashed },
+                  { value: 0, color: "#0ea5e9", lineStyle: LineStyle.Dotted },
+                ]}
+                zoneGradient="linear-gradient(to top, rgba(14,165,233,0.25) 0%, rgba(59,130,246,0.18) 30%, rgba(148,163,184,0.1) 50%, rgba(251,146,60,0.2) 80%, rgba(248,113,113,0.2) 100%)"
+                signalSet={stableRsiSignals}
+              />
+            );
+
+            if (id === "adx" && showADX) return wrap(
+              <MultiSeriesSubChart
+                title="ADX Chart"
+                seriesSets={adxSeriesSets}
+                visibleLogicalRange={visibleLogicalRange}
+                logicalOffset={ADX_LENGTH}
+                signalSet={stableADXSignals}
+                topWarning={latestADX != null && latestADX < 20 ? "Sideways market - Limit high leverage" : undefined}
+                zones={[
+                  { value: 100, color: "#facc15", lineStyle: LineStyle.Dotted },
+                  { value: 50, color: "#fde047", lineStyle: LineStyle.Dashed },
+                  { value: 25, color: "#94a3b8", lineStyle: LineStyle.Dashed },
+                  { value: 0, color: "#0ea5e9", lineStyle: LineStyle.Dotted },
+                ]}
+                zoneGradient="linear-gradient(to top, rgba(14,165,233,0.15) 0%, rgba(148,163,184,0.08) 25%, rgba(251,146,60,0.15) 50%, rgba(248,113,113,0.2) 100%)"
+              />
+            );
+
+            if (id === "momentum" && showMomentum) return wrap(
+              <MultiSeriesSubChart
+                title={`Momentum (${MOMENTUM_LENGTH})`}
+                seriesSets={momentumSeriesSets}
+                visibleLogicalRange={visibleLogicalRange}
+                logicalOffset={MOMENTUM_LENGTH}
+                signalSet={stableMomentumSignals}
+                topWarning={momentumOverstretched ? "Momentum Overstretched" : undefined}
+                zones={[
+                  ...(Number.isFinite(momentumExtremeLevels.high)
+                    ? [{ value: momentumExtremeLevels.high, color: "#facc15", lineStyle: LineStyle.Dashed as const }]
+                    : []),
+                  { value: 0, color: "#94a3b8", lineStyle: LineStyle.Dashed },
+                  ...(Number.isFinite(momentumExtremeLevels.low)
+                    ? [{ value: momentumExtremeLevels.low, color: "#38bdf8", lineStyle: LineStyle.Dashed as const }]
+                    : []),
+                ]}
+                zoneGradient="linear-gradient(to top, rgba(14,165,233,0.2) 0%, rgba(148,163,184,0.08) 50%, rgba(251,146,60,0.2) 100%)"
+              />
+            );
+
+            if (id === "footprint" && showFootprint) return wrap(
+              <FootprintHistoryChart
+                polkadotSymbol={symbol}
+                priceBin={footprintBin}
+                displayPrice={latestPrice}
+                resolution={resolution ?? "1D"}
+                visibleLogicalRange={visibleLogicalRange}
+              />
+            );
+
+            return null;
+          })}
         </div>
       </div>
     </div>
+    </>
   );
 }

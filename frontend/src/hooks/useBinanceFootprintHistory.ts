@@ -9,6 +9,48 @@ interface AggTrade {
   m: boolean;  // isBuyerMaker → true = sell order hit bid
 }
 
+/** Binance kline: [openTime, open, high, low, close, volume, closeTime, ...] */
+type Kline = [number, string, string, string, string, string, number, ...unknown[]];
+
+const KLINES_INTERVALS: [number, string][] = [
+  [2592000, "1M"],
+  [604800, "1w"],
+  [86400, "1d"],
+  [43200, "12h"],
+  [28800, "8h"],
+  [21600, "6h"],
+  [14400, "4h"],
+  [7200, "2h"],
+  [3600, "1h"],
+  [1800, "30m"],
+  [900, "15m"],
+  [300, "5m"],
+  [180, "3m"],
+  [60, "1m"],
+];
+
+function barSecondsToKlinesInterval(barSeconds: number): string {
+  for (const [sec, interval] of KLINES_INTERVALS) {
+    if (barSeconds >= sec) return interval;
+  }
+  return "1m";
+}
+
+async function fetchKlines(
+  symbol: string,
+  interval: string,
+  startMs: number,
+  endMs: number,
+  limit = 1000
+): Promise<Kline[]> {
+  const url =
+    `https://fapi.binance.com/fapi/v1/klines` +
+    `?symbol=${symbol}&interval=${interval}&startTime=${startMs}&endTime=${endMs}&limit=${limit}`;
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Binance klines ${res.status}`);
+  return res.json();
+}
+
 function aggregateToBars(
   trades: AggTrade[],
   barSeconds: number,
@@ -69,6 +111,59 @@ function aggregateToBars(
   return Array.from(barsMap.values()).sort((a, b) => a.barStart - b.barStart);
 }
 
+function klinesToBars(klines: Kline[]): FootprintBar[] {
+  return klines.map((k) => {
+    const barStart = Math.floor(k[0] / 1000);
+    const open = Number(k[1]);
+    const high = Number(k[2]);
+    const low = Number(k[3]);
+    const close = Number(k[4]);
+    const barEnd = Math.floor(k[6] / 1000) + 1;
+    return {
+      barStart,
+      barEnd,
+      open,
+      high,
+      low,
+      close,
+      clusters: {},
+    };
+  });
+}
+
+function mergeClustersIntoBars(
+  baseBars: FootprintBar[],
+  aggBars: FootprintBar[]
+): FootprintBar[] {
+  const clusterMap = new Map<number, Record<string, { buy_vol: number; sell_vol: number; total_vol: number }>>();
+  for (const b of aggBars) {
+    if (Object.keys(b.clusters).length > 0) {
+      clusterMap.set(b.barStart, b.clusters);
+    }
+  }
+  return baseBars.map((bar) => {
+    const clusters = clusterMap.get(bar.barStart);
+    if (clusters) {
+      let vpocLevel = "";
+      let vpocVol = 0;
+      for (const [level, c] of Object.entries(clusters)) {
+        if (c.total_vol > vpocVol) {
+          vpocVol = c.total_vol;
+          vpocLevel = level;
+        }
+      }
+      return { ...bar, clusters, vpocPrice: vpocLevel };
+    }
+    return bar;
+  });
+}
+
+/** 7:00 UTC+7 = 00:00 UTC (start of day UTC). Returns ms. */
+function getStartOfTodayUTC(): number {
+  const d = new Date();
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
 async function fetchAggTrades(
   symbol: string,
   startMs: number,
@@ -83,7 +178,7 @@ async function fetchAggTrades(
     const url =
       `https://fapi.binance.com/fapi/v1/aggTrades` +
       `?symbol=${symbol}&startTime=${fromMs}&endTime=${endMs}&limit=1000`;
-    const res = await fetch(url);
+    const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) throw new Error(`Binance API ${res.status}`);
     const batch: AggTrade[] = await res.json();
     requests++;
@@ -107,15 +202,20 @@ export function tvResolutionToSeconds(resolution: string): number {
   return 60;
 }
 
-/** Max bars that can be accurately fetched given bar size and max API requests */
-function adaptiveNumBars(barSeconds: number): { numBars: number; maxRequests: number } {
-  if (barSeconds <= 60)   return { numBars: 10, maxRequests: 6 };
-  if (barSeconds <= 300)  return { numBars: 8,  maxRequests: 6 };
-  if (barSeconds <= 900)  return { numBars: 6,  maxRequests: 5 };
-  if (barSeconds <= 1800) return { numBars: 4,  maxRequests: 4 };
-  if (barSeconds <= 3600) return { numBars: 3,  maxRequests: 4 };
-  // Daily or longer — return 1-2 bars with sampled data
-  return { numBars: 2, maxRequests: 3 };
+/** Num bars (klines) and max aggTrades requests. aggTrades focused on RECENT period for footprint clusters. */
+function adaptiveNumBars(barSeconds: number): {
+  numBars: number;
+  maxRequests: number;
+  recentBarsForClusters: number;
+} {
+  if (barSeconds <= 60)   return { numBars: 60, maxRequests: 40, recentBarsForClusters: 30 };
+  if (barSeconds <= 300)  return { numBars: 48, maxRequests: 40, recentBarsForClusters: 24 };
+  if (barSeconds <= 900)  return { numBars: 36, maxRequests: 36, recentBarsForClusters: 18 };
+  if (barSeconds <= 1800) return { numBars: 28, maxRequests: 32, recentBarsForClusters: 14 };
+  if (barSeconds <= 3600) return { numBars: 24, maxRequests: 32, recentBarsForClusters: 12 };
+  if (barSeconds <= 14400) return { numBars: 16, maxRequests: 28, recentBarsForClusters: 8 };
+  if (barSeconds <= 86400) return { numBars: 14, maxRequests: 80, recentBarsForClusters: 5 };
+  return { numBars: 30, maxRequests: 60, recentBarsForClusters: 5 };
 }
 
 export default function useBinanceFootprintHistory(
@@ -136,6 +236,7 @@ export default function useBinanceFootprintHistory(
   const adaptiveParams = adaptiveNumBars(barSeconds);
   const baseNumBars = adaptiveParams.numBars;
   const baseMaxRequests = adaptiveParams.maxRequests;
+  const recentBarsForClusters = adaptiveParams.recentBarsForClusters;
   const effectiveNumBars = numBarsOverride ?? baseNumBars;
   const requestMultiplier = Math.max(1, Math.ceil(effectiveNumBars / baseNumBars));
   const maxRequests = baseMaxRequests * requestMultiplier;
@@ -150,13 +251,25 @@ export default function useBinanceFootprintHistory(
 
         const nowMs = Date.now();
         const currentBarStart = Math.floor(nowMs / 1000 / barSeconds) * barSeconds * 1000;
-        const startMs = currentBarStart - effectiveNumBars * barSeconds * 1000;
+        const klinesStartMs = currentBarStart - effectiveNumBars * barSeconds * 1000;
 
-        const trades = await fetchAggTrades(symbol, startMs, nowMs, maxRequests);
+        const startOfTodayUTC = getStartOfTodayUTC();
+        const aggTradesStartMs = Math.max(
+          startOfTodayUTC,
+          currentBarStart - recentBarsForClusters * barSeconds * 1000
+        );
+
+        const interval = barSecondsToKlinesInterval(barSeconds);
+        const [klines, trades] = await Promise.all([
+          fetchKlines(symbol, interval, klinesStartMs, nowMs, Math.min(effectiveNumBars + 5, 1000)),
+          fetchAggTrades(symbol, aggTradesStartMs, nowMs, maxRequests),
+        ]);
         if (cancelRef.current) return;
 
-        const aggregated = aggregateToBars(trades, barSeconds, priceBin);
-        setBars(aggregated);
+        const baseBars = klinesToBars(klines);
+        const aggBars = aggregateToBars(trades, barSeconds, priceBin);
+        const merged = mergeClustersIntoBars(baseBars, aggBars);
+        setBars(merged);
       } catch (e: unknown) {
         if (!cancelRef.current) {
           setError(e instanceof Error ? e.message : "Fetch error");
@@ -187,11 +300,12 @@ export default function useBinanceFootprintHistory(
           const completedBar = manager.processTrade(payload);
           if (completedBar) {
             setBars((prev) => {
-              const next = [...prev, completedBar];
-              if (next.length > effectiveNumBars) {
-                next.splice(0, next.length - effectiveNumBars);
-              }
-              return next;
+              const last = prev[prev.length - 1];
+              const replace = last?.barStart === completedBar.barStart;
+              const next = replace
+                ? [...prev.slice(0, -1), completedBar]
+                : [...prev, completedBar];
+              return next.length > effectiveNumBars ? next.slice(-effectiveNumBars) : next;
             });
           }
         } catch (error) {
