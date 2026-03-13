@@ -7,6 +7,7 @@ import { PERPETUAL_DEX_ABI, symbolToBytes32 } from "@/abis/PerpetualDEX";
 import { ERC20_ABI } from "@/abis/Token";
 import IndicatorPanel from "@/components/IndicatorPanel";
 import RadarSignalPanel from "@/components/RadarSignalPanel";
+import FearGreedIndex from "@/components/FearGreedIndex";
 import AIChatbotWidget from "@/components/AIChatbotWidget";
 import TVChartContainer from "@/components/TVChartContainer";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -874,41 +875,213 @@ export default function Trade() {
           </div>
         </div>
       )}
-      {/* Market Stats Bar - Giá từ Polkadot Oracles (Pyth + DIA) */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-        <div className="bg-gradient-to-br from-[#1e2033] to-[#16182e] rounded-xl p-4 border border-[#363a59]/50 hover:border-[#3d51ff]/30 transition">
-          <div className="text-slate-400 text-xs mb-1">BTC/USD</div>
-          <div className="text-xl font-bold text-white">
+      {/* Market Stats Bar */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+
+        {/* BTC/USD */}
+        <div
+          className="relative overflow-hidden rounded-2xl p-4 border transition-all duration-200 hover:scale-[1.02] hover:shadow-lg cursor-default"
+          style={{
+            background: "linear-gradient(135deg, #1a1400 0%, #16182e 60%, #1e1a08 100%)",
+            borderColor: "rgba(251,146,60,0.25)",
+            boxShadow: "0 0 0 0 rgba(251,146,60,0)",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.boxShadow = "0 0 24px rgba(251,146,60,0.15)")}
+          onMouseLeave={(e) => (e.currentTarget.style.boxShadow = "0 0 0 0 rgba(251,146,60,0)")}
+        >
+          {/* glow blob */}
+          <div className="pointer-events-none absolute -top-4 -right-4 h-16 w-16 rounded-full opacity-20" style={{ background: "radial-gradient(circle, #f97316, transparent)" }} />
+          {/* bottom accent */}
+          <div className="absolute bottom-0 left-0 right-0 h-0.5 rounded-b-2xl" style={{ background: "linear-gradient(to right, transparent, #f97316, transparent)" }} />
+
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-orange-400/80">BTC / USD</span>
+            <span className="flex items-center justify-center h-6 w-6 rounded-lg" style={{ background: "rgba(251,146,60,0.15)", border: "1px solid rgba(251,146,60,0.3)" }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                <path d="M11.5 2C6.25 2 2 6.25 2 11.5S6.25 21 11.5 21 21 16.75 21 11.5 16.75 2 11.5 2z" stroke="#f97316" strokeWidth="1.5"/>
+                <path d="M8 8h5c1.1 0 2 .9 2 2s-.9 2-2 2H8v-4zm0 4h5.5c1.38 0 2.5 1.12 2.5 2.5S14.88 17 13.5 17H8v-5z" fill="#f97316"/>
+                <line x1="10" y1="6" x2="10" y2="8" stroke="#f97316" strokeWidth="1.5" strokeLinecap="round"/>
+                <line x1="13" y1="6" x2="13" y2="8" stroke="#f97316" strokeWidth="1.5" strokeLinecap="round"/>
+                <line x1="10" y1="17" x2="10" y2="19" stroke="#f97316" strokeWidth="1.5" strokeLinecap="round"/>
+                <line x1="13" y1="17" x2="13" y2="19" stroke="#f97316" strokeWidth="1.5" strokeLinecap="round"/>
+              </svg>
+            </span>
+          </div>
+          <div className="text-xl font-bold text-white tracking-tight">
             {btcPrice ? `$${btcPrice.formatted}` : "—"}
           </div>
-          <div className="text-xs text-slate-500 mt-1">{btcPrice ? (btcPrice.source === "pyth" ? "Pyth" : "DIA") : "Polkadot"}</div>
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-orange-400 animate-pulse" />
+            <span className="text-[10px] text-orange-400/60">
+              {btcPrice ? (btcPrice.source === "pyth" ? "Pyth Oracle" : "DIA Oracle") : "Polkadot"}
+            </span>
+          </div>
         </div>
-        <div className="bg-gradient-to-br from-[#1e2033] to-[#16182e] rounded-xl p-4 border border-[#363a59]/50 hover:border-[#3d51ff]/30 transition">
-          <div className="text-slate-400 text-xs mb-1">ETH/USD</div>
-          <div className="text-xl font-bold text-white">
+
+        {/* ETH/USD */}
+        <div
+          className="relative overflow-hidden rounded-2xl p-4 border transition-all duration-200 hover:scale-[1.02] cursor-default"
+          style={{
+            background: "linear-gradient(135deg, #0a0a1a 0%, #16182e 60%, #0e0a24 100%)",
+            borderColor: "rgba(139,92,246,0.25)",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.boxShadow = "0 0 24px rgba(139,92,246,0.15)")}
+          onMouseLeave={(e) => (e.currentTarget.style.boxShadow = "none")}
+        >
+          <div className="pointer-events-none absolute -top-4 -right-4 h-16 w-16 rounded-full opacity-20" style={{ background: "radial-gradient(circle, #8b5cf6, transparent)" }} />
+          <div className="absolute bottom-0 left-0 right-0 h-0.5 rounded-b-2xl" style={{ background: "linear-gradient(to right, transparent, #8b5cf6, transparent)" }} />
+
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-violet-400/80">ETH / USD</span>
+            <span className="flex items-center justify-center h-6 w-6 rounded-lg" style={{ background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.3)" }}>
+              <svg width="10" height="13" viewBox="0 0 10 16" fill="none">
+                <polygon points="5,0 10,8 5,11 0,8" fill="rgba(139,92,246,0.5)" stroke="#8b5cf6" strokeWidth="0.8"/>
+                <polygon points="5,12 10,9 5,16 0,9" fill="#8b5cf6"/>
+              </svg>
+            </span>
+          </div>
+          <div className="text-xl font-bold text-white tracking-tight">
             {ethPrice ? `$${ethPrice.formatted}` : "—"}
           </div>
-          <div className="text-xs text-slate-500 mt-1">{ethPrice ? (ethPrice.source === "pyth" ? "Pyth" : "DIA") : "Polkadot"}</div>
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-violet-400 animate-pulse" />
+            <span className="text-[10px] text-violet-400/60">
+              {ethPrice ? (ethPrice.source === "pyth" ? "Pyth Oracle" : "DIA Oracle") : "Polkadot"}
+            </span>
+          </div>
         </div>
-        <div className="bg-gradient-to-br from-[#1e2033] to-[#16182e] rounded-xl p-4 border border-[#363a59]/50 hover:border-[#3d51ff]/30 transition">
-          <div className="text-slate-400 text-xs mb-1">DOT/USD</div>
-          <div className="text-xl font-bold text-white">
+
+        {/* DOT/USD */}
+        <div
+          className="relative overflow-hidden rounded-2xl p-4 border transition-all duration-200 hover:scale-[1.02] cursor-default"
+          style={{
+            background: "linear-gradient(135deg, #160818 0%, #16182e 60%, #1a0a1c 100%)",
+            borderColor: "rgba(232,121,249,0.25)",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.boxShadow = "0 0 24px rgba(232,121,249,0.15)")}
+          onMouseLeave={(e) => (e.currentTarget.style.boxShadow = "none")}
+        >
+          <div className="pointer-events-none absolute -top-4 -right-4 h-16 w-16 rounded-full opacity-20" style={{ background: "radial-gradient(circle, #e879f9, transparent)" }} />
+          <div className="absolute bottom-0 left-0 right-0 h-0.5 rounded-b-2xl" style={{ background: "linear-gradient(to right, transparent, #e879f9, transparent)" }} />
+
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-fuchsia-400/80">DOT / USD</span>
+            <span className="flex items-center justify-center h-6 w-6 rounded-lg" style={{ background: "rgba(232,121,249,0.15)", border: "1px solid rgba(232,121,249,0.3)" }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="4" fill="#e879f9"/>
+                <circle cx="12" cy="4"  r="2.2" fill="rgba(232,121,249,0.6)"/>
+                <circle cx="12" cy="20" r="2.2" fill="rgba(232,121,249,0.6)"/>
+                <circle cx="4"  cy="12" r="2.2" fill="rgba(232,121,249,0.6)"/>
+                <circle cx="20" cy="12" r="2.2" fill="rgba(232,121,249,0.6)"/>
+              </svg>
+            </span>
+          </div>
+          <div className="text-xl font-bold text-white tracking-tight">
             {dotPrice ? `$${dotPrice.formatted}` : "—"}
           </div>
-          <div className="text-xs text-slate-500 mt-1">{dotPrice ? (dotPrice.source === "pyth" ? "Pyth" : "DIA") : "Polkadot"}</div>
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-fuchsia-400 animate-pulse" />
+            <span className="text-[10px] text-fuchsia-400/60">
+              {dotPrice ? (dotPrice.source === "pyth" ? "Pyth Oracle" : "DIA Oracle") : "Polkadot"}
+            </span>
+          </div>
         </div>
-        <div className="bg-gradient-to-br from-[#1e2033] to-[#16182e] rounded-xl p-4 border border-[#363a59]/50">
-          <div className="text-slate-400 text-xs mb-1">24h Volume</div>
-          <div className="text-xl font-bold text-white">$1.2M</div>
+
+        {/* 24h Volume */}
+        <div
+          className="relative overflow-hidden rounded-2xl p-4 border transition-all duration-200 hover:scale-[1.02] cursor-default"
+          style={{
+            background: "linear-gradient(135deg, #021414 0%, #16182e 60%, #04161a 100%)",
+            borderColor: "rgba(20,184,166,0.25)",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.boxShadow = "0 0 24px rgba(20,184,166,0.15)")}
+          onMouseLeave={(e) => (e.currentTarget.style.boxShadow = "none")}
+        >
+          <div className="pointer-events-none absolute -top-4 -right-4 h-16 w-16 rounded-full opacity-20" style={{ background: "radial-gradient(circle, #14b8a6, transparent)" }} />
+          <div className="absolute bottom-0 left-0 right-0 h-0.5 rounded-b-2xl" style={{ background: "linear-gradient(to right, transparent, #14b8a6, transparent)" }} />
+
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-teal-400/80">24h Volume</span>
+            <span className="flex items-center justify-center h-6 w-6 rounded-lg" style={{ background: "rgba(20,184,166,0.15)", border: "1px solid rgba(20,184,166,0.3)" }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#14b8a6" strokeWidth="2" strokeLinecap="round">
+                <rect x="3"  y="12" width="4" height="9" rx="1" fill="rgba(20,184,166,0.4)" stroke="none"/>
+                <rect x="10" y="7"  width="4" height="14" rx="1" fill="rgba(20,184,166,0.6)" stroke="none"/>
+                <rect x="17" y="3"  width="4" height="18" rx="1" fill="#14b8a6" stroke="none"/>
+              </svg>
+            </span>
+          </div>
+          <div className="text-xl font-bold text-white tracking-tight">$1.2M</div>
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+              <path d="M2 9 L5 5 L8 7 L11 3" stroke="#14b8a6" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            <span className="text-[10px] text-teal-400/60">All markets · 24h</span>
+          </div>
         </div>
-        <div className="bg-gradient-to-br from-[#1e2033] to-[#16182e] rounded-xl p-4 border border-[#363a59]/50">
-          <div className="text-slate-400 text-xs mb-1">Open Interest</div>
-          <div className="text-xl font-bold text-white">$845K</div>
+
+        {/* Open Interest */}
+        <div
+          className="relative overflow-hidden rounded-2xl p-4 border transition-all duration-200 hover:scale-[1.02] cursor-default"
+          style={{
+            background: "linear-gradient(135deg, #0c0820 0%, #16182e 60%, #0e0a24 100%)",
+            borderColor: "rgba(99,102,241,0.25)",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.boxShadow = "0 0 24px rgba(99,102,241,0.15)")}
+          onMouseLeave={(e) => (e.currentTarget.style.boxShadow = "none")}
+        >
+          <div className="pointer-events-none absolute -top-4 -right-4 h-16 w-16 rounded-full opacity-20" style={{ background: "radial-gradient(circle, #6366f1, transparent)" }} />
+          <div className="absolute bottom-0 left-0 right-0 h-0.5 rounded-b-2xl" style={{ background: "linear-gradient(to right, transparent, #6366f1, transparent)" }} />
+
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-indigo-400/80">Open Interest</span>
+            <span className="flex items-center justify-center h-6 w-6 rounded-lg" style={{ background: "rgba(99,102,241,0.15)", border: "1px solid rgba(99,102,241,0.3)" }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="9" stroke="#6366f1" strokeWidth="1.5" fill="none"/>
+                <circle cx="12" cy="12" r="5.5" stroke="rgba(99,102,241,0.6)" strokeWidth="1.5" fill="none"/>
+                <circle cx="12" cy="12" r="2"   fill="#6366f1"/>
+              </svg>
+            </span>
+          </div>
+          <div className="text-xl font-bold text-white tracking-tight">$845K</div>
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+              <path d="M6 2v8M2 6h8" stroke="#6366f1" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+            <span className="text-[10px] text-indigo-400/60">Total positions open</span>
+          </div>
         </div>
-        <div className="bg-gradient-to-br from-[#1e2033] to-[#16182e] rounded-xl p-4 border border-[#363a59]/50">
-          <div className="text-slate-400 text-xs mb-1">Funding Rate</div>
-          <div className="text-xl font-bold text-green-500">0.01%</div>
+
+        {/* Funding Rate */}
+        <div
+          className="relative overflow-hidden rounded-2xl p-4 border transition-all duration-200 hover:scale-[1.02] cursor-default"
+          style={{
+            background: "linear-gradient(135deg, #021408 0%, #16182e 60%, #041a0a 100%)",
+            borderColor: "rgba(34,197,94,0.25)",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.boxShadow = "0 0 24px rgba(34,197,94,0.15)")}
+          onMouseLeave={(e) => (e.currentTarget.style.boxShadow = "none")}
+        >
+          <div className="pointer-events-none absolute -top-4 -right-4 h-16 w-16 rounded-full opacity-20" style={{ background: "radial-gradient(circle, #22c55e, transparent)" }} />
+          <div className="absolute bottom-0 left-0 right-0 h-0.5 rounded-b-2xl" style={{ background: "linear-gradient(to right, transparent, #22c55e, transparent)" }} />
+
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-green-400/80">Funding Rate</span>
+            <span className="flex items-center justify-center h-6 w-6 rounded-lg" style={{ background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)" }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2" strokeLinecap="round">
+                <path d="M12 2v20M17 7l-5-5-5 5"/>
+                <path d="M8 17l4 4 4-4" strokeOpacity="0.4"/>
+              </svg>
+            </span>
+          </div>
+          <div className="text-xl font-bold text-green-400 tracking-tight">+0.01%</div>
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <span className="rounded-full px-1.5 py-0.5 text-[9px] font-semibold" style={{ background: "rgba(34,197,94,0.15)", color: "#4ade80" }}>
+              LONGS PAY
+            </span>
+            <span className="text-[10px] text-green-400/50">per 8h</span>
+          </div>
         </div>
+
       </div>
 
       {/* Chart + Trade Panel */}
@@ -980,34 +1153,96 @@ export default function Trade() {
             <>
               {/* User Stats */}
               <div className="grid grid-cols-3 gap-3">
-                <div className="bg-[#1e2033]/80 rounded-xl p-4 border border-[#363a59]/50">
-                  <div className="text-slate-400 text-xs leading-4">
-                    Wallet
-                    <span className="block text-[10px] text-slate-500">(zUSDC)</span>
+
+                {/* Wallet */}
+                <div
+                  className="relative overflow-hidden rounded-2xl p-3.5 border transition-all duration-200"
+                  style={{
+                    background: "linear-gradient(135deg, #04101a 0%, #16182e 70%, #061424 100%)",
+                    borderColor: "rgba(56,189,248,0.22)",
+                  }}
+                >
+                  <div className="pointer-events-none absolute -top-3 -right-3 h-12 w-12 rounded-full opacity-20" style={{ background: "radial-gradient(circle, #38bdf8, transparent)" }} />
+                  <div className="absolute bottom-0 left-0 right-0 h-0.5 rounded-b-2xl" style={{ background: "linear-gradient(to right, transparent, #38bdf8, transparent)" }} />
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[9px] font-semibold uppercase tracking-[0.18em] text-sky-400/70">Wallet</span>
+                    <span className="flex items-center justify-center h-5 w-5 rounded-md" style={{ background: "rgba(56,189,248,0.12)", border: "1px solid rgba(56,189,248,0.28)" }}>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round">
+                        <path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/>
+                        <path d="M16 3H8L4 7h16l-4-4z" strokeOpacity="0.5"/>
+                        <circle cx="17" cy="13" r="1.5" fill="#38bdf8" stroke="none"/>
+                      </svg>
+                    </span>
                   </div>
-                  <div className="text-white text-sm font-semibold truncate">{formatZUSDC(tokenBalance ?? 0n)}</div>
+                  <div className="text-white text-sm font-bold truncate leading-tight">{formatZUSDC(tokenBalance ?? 0n)}</div>
+                  <div className="mt-1 text-[9px] text-sky-400/50">zUSDC balance</div>
                 </div>
-                <div className="bg-[#1e2033]/80 rounded-xl p-4 border border-[#363a59]/50">
-                  <div className="text-slate-400 text-xs leading-4">
-                    Collateral
-                    <span className="block text-[10px] text-slate-500">(zUSDC)</span>
+
+                {/* Collateral */}
+                <div
+                  className="relative overflow-hidden rounded-2xl p-3.5 border transition-all duration-200"
+                  style={{
+                    background: "linear-gradient(135deg, #140a00 0%, #16182e 70%, #1a0e00 100%)",
+                    borderColor: "rgba(245,158,11,0.22)",
+                  }}
+                >
+                  <div className="pointer-events-none absolute -top-3 -right-3 h-12 w-12 rounded-full opacity-20" style={{ background: "radial-gradient(circle, #f59e0b, transparent)" }} />
+                  <div className="absolute bottom-0 left-0 right-0 h-0.5 rounded-b-2xl" style={{ background: "linear-gradient(to right, transparent, #f59e0b, transparent)" }} />
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[9px] font-semibold uppercase tracking-[0.18em]" style={{ color: "rgba(245,158,11,0.7)" }}>Collateral</span>
+                    <span className="flex items-center justify-center h-5 w-5 rounded-md" style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.28)" }}>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" strokeLinecap="round">
+                        <rect x="3" y="11" width="18" height="11" rx="2"/>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4" strokeOpacity="0.5"/>
+                        <circle cx="12" cy="16" r="1.5" fill="#f59e0b" stroke="none"/>
+                      </svg>
+                    </span>
                   </div>
-                  <div className="text-white text-sm font-semibold">{formatZUSDC(dexBalance ?? 0n)}</div>
+                  <div className="text-white text-sm font-bold truncate leading-tight">{formatZUSDC(dexBalance ?? 0n)}</div>
+                  <div className="mt-1 text-[9px]" style={{ color: "rgba(245,158,11,0.5)" }}>deposited margin</div>
                 </div>
-                <div className="bg-[#1e2033]/80 rounded-xl p-4 border border-[#363a59]/50">
-                  <div className="text-slate-400 text-xs leading-4">
-                    Position
-                    <span className="block text-[10px] text-slate-500">(zUSDC)</span>
-                  </div>
-                  <div
-                    className={`text-sm font-semibold ${openPositionMargin > 0 ? (openPositionSide === "Long" ? "text-green-400" : openPositionSide === "Short" ? "text-red-400" : "text-slate-200") : "text-slate-500"}`}
-                  >
-                    {openPositionMargin > 0 ? formatZUSDCNumber(openPositionMargin) : "—"}
-                  </div>
-                  {openPositionMargin > 0 && openPositionSide !== "N/A" && (
-                    <div className="text-[11px] text-slate-400">{openPositionSide}</div>
-                  )}
-                </div>
+
+                {/* Position */}
+                {(() => {
+                  const isLong  = openPositionSide === "Long";
+                  const isShort = openPositionSide === "Short";
+                  const hasPos  = openPositionMargin > 0;
+                  // Long = lime #a3e635 (distinct from Funding green #22c55e)
+                  // Short = rose #f87171 (no red in top-6 cards)
+                  const accent  = hasPos ? (isLong ? "#a3e635" : isShort ? "#f87171" : "#94a3b8") : "#64748b";
+                  const accentBg   = hasPos ? (isLong ? "rgba(163,230,53,0.12)" : isShort ? "rgba(248,113,113,0.12)" : "rgba(148,163,184,0.12)") : "rgba(100,116,139,0.08)";
+                  const accentBord = hasPos ? (isLong ? "rgba(163,230,53,0.28)" : isShort ? "rgba(248,113,113,0.28)" : "rgba(148,163,184,0.2)") : "rgba(100,116,139,0.15)";
+                  const gradEnd   = hasPos ? (isLong ? "#0a1000" : isShort ? "#180404" : "#0d1020") : "#0d0f1c";
+                  return (
+                    <div
+                      className="relative overflow-hidden rounded-2xl p-3.5 border transition-all duration-200"
+                      style={{
+                        background: `linear-gradient(135deg, ${gradEnd} 0%, #16182e 70%, ${gradEnd} 100%)`,
+                        borderColor: accentBord,
+                      }}
+                    >
+                      <div className="pointer-events-none absolute -top-3 -right-3 h-12 w-12 rounded-full opacity-20" style={{ background: `radial-gradient(circle, ${accent}, transparent)` }} />
+                      <div className="absolute bottom-0 left-0 right-0 h-0.5 rounded-b-2xl" style={{ background: `linear-gradient(to right, transparent, ${accent}, transparent)` }} />
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[9px] font-semibold uppercase tracking-[0.18em]" style={{ color: `${accent}99` }}>Position</span>
+                        <span className="flex items-center justify-center h-5 w-5 rounded-md" style={{ background: accentBg, border: `1px solid ${accentBord}` }}>
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={accent} strokeWidth="2" strokeLinecap="round">
+                            {isLong  && <><path d="M12 19V5"/><path d="M5 12l7-7 7 7" strokeOpacity="0.6"/></>}
+                            {isShort && <><path d="M12 5v14"/><path d="M19 12l-7 7-7-7" strokeOpacity="0.6"/></>}
+                            {!hasPos && <><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2" strokeOpacity="0.4"/></>}
+                          </svg>
+                        </span>
+                      </div>
+                      <div className="text-sm font-bold leading-tight truncate" style={{ color: hasPos ? accent : "#475569" }}>
+                        {hasPos ? formatZUSDCNumber(openPositionMargin) : "—"}
+                      </div>
+                      <div className="mt-1 text-[9px]" style={{ color: `${accent}70` }}>
+                        {hasPos && openPositionSide !== "N/A" ? openPositionSide : "no open position"}
+                      </div>
+                    </div>
+                  );
+                })()}
+
               </div>
               {hasPosition && entryPrice != null && positionMargin > 0 && displayPrice?.price && (
                 <div className="mt-3">
@@ -1244,6 +1479,9 @@ export default function Trade() {
                 resolution={chartResolution}
                 tradingViewSymbol={tradingviewSymbol}
               />
+
+              {/* ── Fear & Greed Index ── */}
+              <FearGreedIndex />
             </>
           )}
         </div>

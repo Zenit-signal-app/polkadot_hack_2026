@@ -16,6 +16,9 @@ import {
   type PolkadotSymbol,
 } from "@/services/polkadotPrice";
 import useBinanceFootprintHistory, { tvResolutionToSeconds } from "@/hooks/useBinanceFootprintHistory";
+import FuturesLiquidityChart from "@/components/FuturesLiquidityChart";
+import LiquidityHeatmapChart from "@/components/LiquidityHeatmapChart";
+import LiquidationHeatmapChart from "@/components/LiquidationHeatmapChart";
 
 declare global {
   interface Window {
@@ -68,11 +71,14 @@ interface AddToChatbotButtonProps {
 }
 
 const INDICATOR_LABELS: Record<string, string> = {
-  "ema-sma": "EMA & SMA Chart",
-  "rsi": "RSI Chart",
-  "adx": "ADX Chart",
-  "momentum": "Momentum (12)",
-  "footprint": "Footprint History",
+  "ema-sma":           "EMA & SMA Chart",
+  "rsi":               "RSI Chart",
+  "adx":               "ADX Chart",
+  "momentum":          "Momentum (12)",
+  "footprint":         "Footprint History",
+  "futures-liquidity":    "Futures Liquidity",
+  "liquidity-heatmap":      "Liquidity Heatmap",
+  "liquidation-heatmap":    "Liquidation Heatmap",
 };
 
 function dispatchChatbotRequest(detail: ChatbotRequestDetail) {
@@ -471,7 +477,7 @@ function MultiSeriesSubChart({
                 <span className="font-mono">{signalTimeLabel}</span>
               </div>
               <div className="flex justify-between mb-1 text-[12px]">
-                <span className="text-slate-400">Price</span>
+                <span className="text-slate-400">Entry (signal price)</span>
                 <span className="font-mono">${fmt(hoverSignal.signal.entryPrice)}</span>
               </div>
               <div className="flex justify-between mb-1 text-[12px]">
@@ -1724,9 +1730,12 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
   const [showADX, setShowADX] = useState(true);
   const [showMomentum, setShowMomentum] = useState(true);
   const [showFootprint, setShowFootprint] = useState(false);
+  const [showFuturesLiquidity, setShowFuturesLiquidity] = useState(true);
+  const [showLiquidityHeatmap,   setShowLiquidityHeatmap]   = useState(true);
+  const [showLiquidationHeatmap, setShowLiquidationHeatmap] = useState(true);
 
   const [indicatorOrder, setIndicatorOrder] = useState<string[]>(
-    ["ema-sma", "rsi", "adx", "momentum", "footprint"]
+    ["ema-sma", "rsi", "adx", "momentum", "footprint", "futures-liquidity", "liquidity-heatmap", "liquidation-heatmap"]
   );
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
@@ -2304,24 +2313,42 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
           </button>
         </div>
 
-        {/* description */}
-        <p className="px-5 pt-3 pb-1 text-[10px] text-slate-600 uppercase tracking-widest">
-          Toggle visibility
-        </p>
+        {/* toggle list — grouped and sorted by indicatorOrder, rows are draggable */}
+        {(() => {
+          type IndicatorItem = { id: string; label: string; value: boolean; onChange: (v: boolean) => void; color: string; note?: string };
+          const allItems: IndicatorItem[] = [
+            { id: "ema-sma",             label: "EMA & SMA Chart",          value: showEMASMA,           onChange: setShowEMASMA,           color: "#a78bfa", note: undefined },
+            { id: "rsi",                 label: "RSI Chart",                value: showRSI,              onChange: setShowRSI,              color: "#38bdf8", note: undefined },
+            { id: "adx",                 label: "ADX Chart",                value: showADX,              onChange: setShowADX,              color: "#fb7185", note: undefined },
+            { id: "momentum",            label: `Momentum (${MOMENTUM_LENGTH})`, value: showMomentum,   onChange: setShowMomentum,         color: "#0ea5e9", note: undefined },
+            { id: "footprint",           label: "Footprint History",        value: showFootprint,        onChange: setShowFootprint,        color: "#4ade80", note: "Feature under development." },
+            { id: "futures-liquidity",   label: "Futures Liquidity",        value: showFuturesLiquidity, onChange: setShowFuturesLiquidity, color: "#34d399", note: "Feature under development." },
+            { id: "liquidity-heatmap",   label: "Liquidity Heatmap",        value: showLiquidityHeatmap, onChange: setShowLiquidityHeatmap, color: "#f97316", note: "Feature under development." },
+            { id: "liquidation-heatmap", label: "Liquidation Heatmap",      value: showLiquidationHeatmap, onChange: setShowLiquidationHeatmap, color: "#ef4444", note: "Feature under development." },
+          ];
 
-        {/* toggle list — sorted by indicatorOrder, rows are draggable */}
-        <div className="flex flex-col gap-0.5 px-3 pb-3">
-          {(
-            [
-              { id: "ema-sma",   label: "EMA & SMA Chart",           value: showEMASMA,   onChange: setShowEMASMA,   color: "#a78bfa", note: undefined },
-              { id: "rsi",       label: "RSI Chart",                  value: showRSI,      onChange: setShowRSI,      color: "#38bdf8", note: undefined },
-              { id: "adx",       label: "ADX Chart",                  value: showADX,      onChange: setShowADX,      color: "#fb7185", note: undefined },
-              { id: "momentum",  label: `Momentum (${MOMENTUM_LENGTH})`, value: showMomentum, onChange: setShowMomentum, color: "#0ea5e9", note: undefined },
-              { id: "footprint", label: "Footprint History",          value: showFootprint, onChange: setShowFootprint, color: "#4ade80", note: "Feature under development." },
-            ] as Array<{ id: string; label: string; value: boolean; onChange: (v: boolean) => void; color: string; note?: string }>
-          )
-            .sort((a, b) => indicatorOrder.indexOf(a.id) - indicatorOrder.indexOf(b.id))
-            .map(({ id, label, value, onChange, color, note }) => (
+          const TECHNICAL_IDS = new Set(["ema-sma", "rsi", "adx", "momentum"]);
+          const sorted = [...allItems].sort((a, b) => indicatorOrder.indexOf(a.id) - indicatorOrder.indexOf(b.id));
+          const technicals = sorted.filter((i) => TECHNICAL_IDS.has(i.id));
+          const onchain    = sorted.filter((i) => !TECHNICAL_IDS.has(i.id));
+
+          const GroupLabel = ({ icon, label, accent }: { icon: React.ReactNode; label: string; accent: string }) => (
+            <div
+              className="flex items-center gap-2 px-3 pt-3 pb-1"
+              style={{ borderTop: "1px solid #1a1d30" }}
+            >
+              <span style={{ color: accent }}>{icon}</span>
+              <span
+                className="text-[9px] font-semibold uppercase tracking-[0.25em]"
+                style={{ color: accent }}
+              >
+                {label}
+              </span>
+              <span className="flex-1 h-px" style={{ background: `linear-gradient(to right, ${accent}40, transparent)` }} />
+            </div>
+          );
+
+          const ToggleRow = ({ id, label, value, onChange, color, note }: IndicatorItem) => (
             <div
               key={id}
               draggable
@@ -2349,7 +2376,6 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
                   <circle cx="2" cy="11"  r="1.3"/><circle cx="7" cy="11"  r="1.3"/>
                 </svg>
               </div>
-
               <div className="flex items-center gap-2.5 min-w-0 flex-1">
                 <span
                   className="h-2 w-2 shrink-0 rounded-full"
@@ -2371,8 +2397,42 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
               </div>
               <IOSToggle value={value} onChange={onChange} />
             </div>
-          ))}
-        </div>
+          );
+
+          return (
+            <div className="flex flex-col pb-3">
+              {/* ── Technical Indicators ── */}
+              <GroupLabel
+                icon={
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                  </svg>
+                }
+                label="Technical Indicators"
+                accent="#a78bfa"
+              />
+              <div className="flex flex-col gap-0.5 px-3">
+                {technicals.map((item) => <ToggleRow key={item.id} {...item} />)}
+              </div>
+
+              {/* ── On-chain Data ── */}
+              <GroupLabel
+                icon={
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                    <ellipse cx="12" cy="5" rx="9" ry="3"/>
+                    <path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/>
+                    <path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/>
+                  </svg>
+                }
+                label="On-chain Data"
+                accent="#34d399"
+              />
+              <div className="flex flex-col gap-0.5 px-3">
+                {onchain.map((item) => <ToggleRow key={item.id} {...item} />)}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* sidebar footer */}
         <div className="mt-auto border-t border-[#1a1d30] px-5 py-4">
@@ -2564,7 +2624,7 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
                 </span>
               </div>
               <div className="flex justify-between mb-1 text-[12px]">
-                <span className="text-slate-400">Price</span>
+                <span className="text-slate-400">Entry (signal price)</span>
                 <span className="font-mono">${fmt(tooltipSignal.signal.entryPrice)}</span>
               </div>
                     <div className="flex justify-between mb-1 text-[12px]">
@@ -2676,6 +2736,22 @@ export default function IndicatorPanel({ symbol, tradingViewSymbol, resolution, 
                 resolution={resolution ?? "1D"}
                 visibleLogicalRange={visibleLogicalRange}
               />
+            );
+
+            if (id === "futures-liquidity" && showFuturesLiquidity) return wrap(
+              <FuturesLiquidityChart
+                symbol={symbol}
+                resolution={resolution ?? "1D"}
+                visibleLogicalRange={visibleLogicalRange}
+              />
+            );
+
+            if (id === "liquidity-heatmap" && showLiquidityHeatmap) return wrap(
+              <LiquidityHeatmapChart symbol={symbol} />
+            );
+
+            if (id === "liquidation-heatmap" && showLiquidationHeatmap) return wrap(
+              <LiquidationHeatmapChart symbol={symbol} />
             );
 
             return null;

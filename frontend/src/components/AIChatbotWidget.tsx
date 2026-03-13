@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import robotIcon from "../../icon/Gemini_Generated_Image_cdy6yocdy6yocdy6.png";
+import robotIcon from "../../icon/Gemini_Generated_Image_jqqzfpjqqzfpjqqz.png";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Message {
@@ -11,8 +11,8 @@ interface Message {
 
 // ─── Smart response engine (placeholder until real AI backend) ────────────────
 const GREETINGS = [
-  "Hello, trader! I'm **Z7 AI**, your trading assistant. Ask me about market signals, indicators, or trading strategy.",
-  "Hey! **Z7 AI** here. I can help you read the Signal Radar, understand indicators, or discuss entry strategies.",
+  "Hello, trader! I'm **Zenit AI**, your trading assistant. Ask me about market signals, indicators, or trading strategy.",
+  "Hey! **Zenit AI** here. I can help you read the Signal Radar, understand indicators, or discuss entry strategies.",
 ];
 
 function pickGreeting() {
@@ -49,12 +49,49 @@ const INDICATOR_EXPLANATIONS: Record<string, string> = {
   "adx": "ADX tracks trend strength (0–100). Values above ~40 confirm a strong trend, while values under ~25 hint at a choppy or ranging market. Use it with RSI/MAs to decide whether the trend is worth trading.",
   "momentum": "Momentum (12) compares the latest price to its level 12 bars ago. A reading near 100 signals accelerating upward momentum (long), near 0 signals downward momentum (short), and flattening shows cooling momentum.",
   "footprint": "Footprint History highlights where aggressive buying or selling happened across price levels. Look for high volume prints supporting the direction implied by the other indicators before committing.",
+  "radar": "", // handled dynamically via prompt from RadarSignalPanel
+  "fng": "",   // handled dynamically via prompt from FearGreedIndex
+  "futures-liquidity": "The **Futures Liquidity** panel shows three key derivatives metrics:\n\n• **Open Interest (OI)** – total USD value of open futures positions. Rising OI with rising price = strong bullish trend. Rising OI with falling price = strong bearish trend. Falling OI = positions being closed.\n\n• **Long/Short Ratio** – ratio > 1 means more long exposure among top traders; < 1 means more short exposure. Extreme values often precede reversals (contrarian signal).\n\n• **Funding Rate** – the 8-hour fee between longs and shorts. Positive = longs pay shorts (market is long-heavy, potential caution for longs). Negative = shorts pay longs (market is short-heavy, potential short squeeze).",
+  "liquidity-heatmap": "The **Liquidity Heatmap** visualises Binance Futures **order book depth** over time.\n\n• **Y-axis** = price levels (±3% around mid price). **X-axis** = time (each column is one snapshot, ~8 s apart).\n\n• **Cell brightness** = size of orders sitting at that price level (log scale). Brighter = more liquidity / larger order wall. White cells are 'whale walls'.\n\n• **Warm colours (orange/yellow)** = bid liquidity (buy support). **Cool colours (blue/cyan)** = ask liquidity (sell resistance).\n\n**How to trade it:** Large bid walls below price act as support — price often bounces off them. Large ask walls above price act as resistance — price struggles to break through. When a big wall suddenly disappears (spoofing) or gets absorbed, it can signal a breakout. Use the heatmap together with RSI and OI to confirm entries.",
+  "liquidation-heatmap": "The **Liquidation Heatmap** shows estimated price levels where **leveraged futures positions would be force-liquidated** if price moves there.\n\n• **Red/orange zones (left side)** = LONG liquidation clusters: if price drops to these levels, leveraged long positions get wiped out, causing a cascade of selling pressure.\n\n• **Teal/cyan zones (right side)** = SHORT liquidation clusters: if price rises here, short positions get force-closed, triggering a short squeeze and further upward momentum.\n\n• **Brightness** = estimated USD volume concentrated at that price level. Bright = large cluster = strong magnet for price.\n\n**How to trade it:** Price is often 'hunted' toward the nearest bright zone (stop hunt / liquidation cascade). After a big cluster gets wiped out, the move often reverses. Use these zones as:\n  — Potential support/resistance\n  — Entry after a liquidity sweep\n  — Target levels for take-profit\n\nCombine with the OI chart and Funding Rate to confirm whether the market is long-heavy or short-heavy.",
 };
 
-function buildIndicatorResponse(indicatorId?: string, label?: string) {
+function buildIndicatorResponse(indicatorId?: string, label?: string, prompt?: string) {
+  // For the Fear & Greed Index, the prompt contains the live value
+  if (indicatorId === "fng" && prompt) {
+    const match = prompt.match(/currently at (\d+) \(([^)]+)\)/);
+    const value = match ? Number(match[1]) : 50;
+    const label = match ? match[2] : "Neutral";
+    const advice =
+      value <= 24
+        ? "**Extreme Fear** often marks market bottoms — historically a contrarian buying opportunity for long-term traders. However, it can persist; wait for a stabilization signal before entering."
+        : value <= 44
+        ? "**Fear** levels suggest risk appetite is low. Prices may be undervalued. Cautious accumulation on dips can work well, but keep stop losses tight."
+        : value <= 54
+        ? "**Neutral** — the market is in balance. Focus on technical signals (RSI, EMA) rather than sentiment to make entry decisions."
+        : value <= 74
+        ? "**Greed** levels mean momentum is strong and FOMO is building. Avoid chasing entries; look for pullbacks or confirmations before entering Long."
+        : "**Extreme Greed** historically precedes corrections. Reduce position sizes, tighten take profits, and be cautious about new Long entries. Consider taking partial profits.";
+    return `**Fear & Greed Index: ${value} — ${label}**\n\n${advice}\n\nThe index aggregates 6 data sources: volatility, market momentum, social media, surveys, dominance, and Google trends. It ranges from 0 (Extreme Fear) to 100 (Extreme Greed).`;
+  }
+
+  // For the Signal Radar, the prompt already contains the live score context — parse and augment it
+  if (indicatorId === "radar" && prompt) {
+    const biasMatch = prompt.match(/overall bias is (\w+) \((\d+)\/100, (\d+)% confidence\)/);
+    const bias = biasMatch ? biasMatch[1] : "NEUTRAL";
+    const overall = biasMatch ? Number(biasMatch[2]) : 50;
+    const conf = biasMatch ? Number(biasMatch[3]) : 0;
+    const biasAdvice =
+      bias === "LONG"
+        ? "The Radar leans **Long**. Most indicators are pointing upward momentum. Consider a Long entry with confirmation from RSI staying above 50 and EMA12 above EMA26."
+        : bias === "SHORT"
+        ? "The Radar leans **Short**. Most indicators are pointing downward pressure. Consider a Short entry with confirmation from RSI below 50 and EMA12 below EMA26."
+        : "The Radar is **Neutral**. Signals are mixed — it's safer to wait for a clearer directional conviction before entering.";
+    return `**Signal Radar Analysis**\n\nCurrent overall score: **${overall}/100** · Confidence: **${conf}%** · Bias: **${bias}**\n\n${biasAdvice}\n\nThe Radar aggregates 5 indicators (RSI, EMA Cross, SMA, ADX, Momentum) into a unified 0–100 score. Score above 62 → Long bias, below 38 → Short bias, 38–62 → Neutral. The higher the confidence %, the more consistently aligned the indicators are.`;
+  }
   const explanation = indicatorId ? INDICATOR_EXPLANATIONS[indicatorId] : undefined;
   const prefix = label ? `You asked about ${label}. ` : "";
-  return `${prefix}${explanation ?? INDICATOR_GUIDE}`;
+  return `${prefix}${explanation || INDICATOR_GUIDE}`;
 }
 
 function buildReply(input: string): string {
@@ -100,7 +137,7 @@ function buildReply(input: string): string {
     return "Polkadot (DOT) is a smaller cap asset with higher volatility. Signals from the Radar can have sharper swings — consider tighter stops and smaller position sizes relative to BTC/ETH trades.";
 
   if (/hello|hi|hey|greet/.test(q))
-    return "Hey there, trader! How can **Z7 AI** help you today? Ask about indicators, entry signals, risk management, or any crypto pair.";
+    return "Hey there, trader! How can **Zenit AI** help you today? Ask about indicators, entry signals, risk management, or any crypto pair.";
 
   if (/thank/.test(q))
     return "Glad I could help! Trade smart, manage your risk, and feel free to ask anything else. 🚀";
@@ -200,7 +237,7 @@ export default function AIChatbotWidget() {
         const assistantMsg: Message = {
           id: timestamp + 1,
           role: "assistant",
-          text: buildIndicatorResponse(payload.indicatorId, payload.label),
+          text: buildIndicatorResponse(payload.indicatorId, payload.label, payload.prompt),
           ts: now(),
         };
         setMessages((prev) => [...prev, assistantMsg]);
@@ -290,20 +327,30 @@ export default function AIChatbotWidget() {
                 style={{
                   border: "2px solid rgba(99,102,241,0.5)",
                   boxShadow: "0 0 12px rgba(99,102,241,0.4)",
+                  background: "radial-gradient(circle at 30% 30%, rgba(255,255,255,0.35), rgba(15,23,42,0.75))",
                 }}
               >
-                <img
-                  src={robotIcon}
-                  alt="Z7 AI icon"
-                  className="h-full w-full object-cover"
-                  decoding="async"
-                />
+                <div className="relative h-full w-full flex items-center justify-center">
+                  <div
+                    className="absolute h-8 w-8 rounded-full"
+                    style={{
+                      background: "radial-gradient(circle at 20% 20%, rgba(255,255,255,0.25), rgba(14,165,233,0.1))",
+                      filter: "blur(4px)",
+                    }}
+                  />
+                  <img
+                    src={robotIcon}
+                    alt="Zenit AI icon"
+                    className="relative h-full w-full rounded-full object-cover"
+                    decoding="async"
+                  />
+                </div>
               </div>
               <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full bg-emerald-400 border-2 border-[#0b0d20]" />
             </div>
 
             <div className="flex-1 min-w-0">
-              <div className="text-[13px] font-bold text-white tracking-wide">Z7 AI Assistant</div>
+          <div className="text-[13px] font-bold text-white tracking-wide">Zenit AI Assistant</div>
               <div className="text-[10px] text-cyan-400/80">Trading · Online</div>
             </div>
 
@@ -436,7 +483,7 @@ export default function AIChatbotWidget() {
           animation: pulse && !open ? "z7-pulse 2s infinite" : undefined,
           transition: "box-shadow 0.3s ease",
         }}
-        title="Z7 AI Trading Assistant"
+        title="Zenit AI Trading Assistant"
       >
         {/* Spinning outer ring */}
         <svg
@@ -449,10 +496,17 @@ export default function AIChatbotWidget() {
 
         {/* Inner icon */}
         <div className="relative flex h-full w-full items-center justify-center">
+          <div
+            className="absolute h-14 w-14 rounded-full"
+            style={{
+              background: "radial-gradient(circle at 30% 30%, rgba(255,255,255,0.4), rgba(3,7,20,0.65))",
+              boxShadow: "0 0 20px rgba(61,81,255,0.35)",
+            }}
+          />
           <img
             src={robotIcon}
-            alt="Z7 AI icon"
-            className="h-11 w-11 rounded-full object-cover"
+            alt="Zenit AI icon"
+            className="h-11 w-11 rounded-full object-cover relative"
             decoding="async"
           />
         </div>

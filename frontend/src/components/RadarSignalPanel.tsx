@@ -40,7 +40,7 @@ function scoreRSI(data: BenchmarkHistoryPoint[], len = 14): number {
 }
 
 function scoreEMACross(data: BenchmarkHistoryPoint[]): number {
-  const price = data.at(-1)?.close;
+  const price = data[data.length - 1]?.close;
   const e12 = emaVal(data, 12);
   const e26 = emaVal(data, 26);
   if (!price || !e12 || !e26) return 50;
@@ -49,7 +49,7 @@ function scoreEMACross(data: BenchmarkHistoryPoint[]): number {
 }
 
 function scoreSMA(data: BenchmarkHistoryPoint[], len = 14): number {
-  const price = data.at(-1)?.close;
+  const price = data[data.length - 1]?.close;
   if (!price || data.length < len) return 50;
   const sma = data.slice(-len).reduce((s, p) => s + p.close, 0) / len;
   const ref = Math.max(atrApprox(data, len), price * 0.002);
@@ -85,7 +85,9 @@ function scoreMomentum(data: BenchmarkHistoryPoint[], len = 12): number {
   const moms = data.slice(len).map((p, i) => p.close - data[i].close);
   const mn = Math.min(...moms), mx = Math.max(...moms);
   if (mx === mn) return 50;
-  return clamp(((moms.at(-1)! - mn) / (mx - mn)) * 100);
+  const last = moms[moms.length - 1];
+  if (last === undefined) return 50;
+  return clamp(((last - mn) / (mx - mn)) * 100);
 }
 
 // ─── Resolution mapping ─────────────────────────────────────────────────────
@@ -452,7 +454,7 @@ export default function RadarSignalPanel({
         })}
       </div>
 
-      {/* Legend */}
+      {/* Legend + Add to AI */}
       <div className="mt-3 flex items-center justify-between px-1">
         <div className="flex items-center gap-1.5">
           <span className="h-2 w-2 rounded-full bg-rose-400/70" />
@@ -463,6 +465,36 @@ export default function RadarSignalPanel({
           <span className="text-[9px] text-slate-500 uppercase tracking-wider">100 = Long</span>
           <span className="h-2 w-2 rounded-full bg-green-400/70" />
         </div>
+      </div>
+
+      {/* Add to AI Chatbot */}
+      <div className="mt-3 flex justify-end">
+        <button
+          type="button"
+          onClick={() => {
+            if (typeof window === "undefined") return;
+            const scoresLabel = AXES.map((ax, i) =>
+              `${ax.label}: ${scores[i].toFixed(0)}`
+            ).join(", ");
+            const prompt = `Explain the current Signal Radar readings for ${symbol} (${resolution}): overall bias is ${bias} (${overall.toFixed(0)}/100, ${confidence.toFixed(0)}% confidence). Individual scores — ${scoresLabel}. What does this mean for a potential trade entry?`;
+            window.dispatchEvent(
+              new CustomEvent("ai-chatbot-request", {
+                detail: { topic: "indicators", indicatorId: "radar", label: "Signal Radar", prompt },
+              })
+            );
+          }}
+          className="flex items-center gap-1.5 rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-100 shadow-lg shadow-indigo-500/40 transition hover:bg-white/20"
+          style={{
+            background: "rgba(99,102,241,0.15)",
+            border: "1px solid rgba(99,102,241,0.3)",
+          }}
+          title="Ask Zenit AI about the current Signal Radar"
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" className="inline-block">
+            <path d="M6 1v10M1 6h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+          <span>Add to AI</span>
+        </button>
       </div>
     </div>
   );
