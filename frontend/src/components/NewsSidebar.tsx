@@ -213,12 +213,9 @@ export default function NewsSidebar() {
   const [popup, setPopup]   = useState<PopupItem | null>(null);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const fetchedRef = useRef(false);
 
   // ── Fetch RSS ──────────────────────────────────────────────────────────────
   const fetchAll = useCallback(async () => {
-    if (fetchedRef.current) return;
-    fetchedRef.current = true;
     setLoading(true);
 
     // News RSS
@@ -257,7 +254,10 @@ export default function NewsSidebar() {
   }, []);
 
   useEffect(() => {
-    if (open) fetchAll();
+    if (!open) return;
+    fetchAll();
+    const timer = setInterval(() => fetchAll(), 600000); // refresh every 10 minutes
+    return () => clearInterval(timer);
   }, [open, fetchAll]);
 
   // ── Close popup on Escape ──────────────────────────────────────────────────
