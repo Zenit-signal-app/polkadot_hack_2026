@@ -96,36 +96,14 @@ function formatCurrency(value?: number | null) {
   return USD_FORMATTER.format(value);
 }
 
+/** Check if tx receipt indicates failure (handles both string and numeric status from different chains) */
+function isTxReverted(status: unknown): boolean {
+  return status === "reverted" || status === 0 || status === "0x0";
+}
+
 function formatTimestamp(timestamp: number) {
   const date = new Date(timestamp);
   return `${TIME_FORMATTER.format(date)} ${DATE_PART_FORMATTER.format(date)}`;
-}
-
-const HISTORY_STORAGE_PREFIX = "zenit-history";
-function buildHistoryKey(type: "trade" | "deposit" | "withdraw", wallet?: string) {
-  if (!wallet) return "";
-  return `${HISTORY_STORAGE_PREFIX}-${type}-${wallet.toLowerCase()}`;
-}
-function readHistory<T>(key: string): T[] {
-  if (!key) return [];
-  if (typeof window === "undefined") return [];
-  const raw = window.localStorage.getItem(key);
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-function persistHistory<T>(key: string, data: T[]) {
-  if (!key) return;
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(key, JSON.stringify(data));
-  } catch {
-    // ignore
-  }
 }
 
 function calculatePnL(entry: HistoryEntry, currentPrice?: number) {
@@ -189,15 +167,47 @@ export default function Trade() {
   const [positionType, setPositionType] = useState<"Long" | "Short">("Long");
   const [closeAmount, setCloseAmount] = useState("");
   const [activeTab, setActiveTab] = useState<"trade" | "deposit">("trade");
+  const [txError, setTxError] = useState<string | null>(null);
+  const [isDepositing, setIsDepositing] = useState(false);
 
   const [chartSymbol, setChartSymbol] = useState<PolkadotSymbol>("BTCUSD");
   const [chartResolution, setChartResolution] = useState<string>("1D");
   const [chartRightOffset, setChartRightOffset] = useState<number>(30);
   const [historyTab, setHistoryTab] = useState<"timeline" | "open" | "closed">("timeline");
-  const [tradeHistory, setTradeHistory] = useState<HistoryEntry[]>([]);
-  const [depositHistory, setDepositHistory] = useState<Array<{ id: string; amount: number; timestamp: number }>>([]);
-  const [withdrawHistory, setWithdrawHistory] = useState<Array<{ id: string; amount: number; timestamp: number }>>([]);
+  // ── Persistent history helpers (localStorage keyed by wallet address) ──────
+  const storageKey = useCallback(
+    (suffix: string) => (address ? `zenit:${suffix}:${address.toLowerCase()}` : null),
+    [address],
+  );
+  const loadFromStorage = useCallback(
+    <T,>(suffix: string, fallback: T): T => {
+      const key = storageKey(suffix);
+      if (!key) return fallback;
+      try {
+        const raw = localStorage.getItem(key);
+        return raw ? (JSON.parse(raw) as T) : fallback;
+      } catch {
+        return fallback;
+      }
+    },
+    [storageKey],
+  );
+  const saveToStorage = useCallback(
+    <T,>(suffix: string, value: T) => {
+      const key = storageKey(suffix);
+      if (!key) return;
+      try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* quota */ }
+    },
+    [storageKey],
+  );
 
+  const [tradeHistory, setTradeHistory] = useState<HistoryEntry[]>(() => []);
+  const [depositHistory, setDepositHistory] = useState<Array<{ id: string; amount: number; timestamp: number }>>(() => []);
+  const [withdrawHistory, setWithdrawHistory] = useState<Array<{ id: string; amount: number; timestamp: number }>>(() => []);
+
+  const skipNextSaveRef = useRef(false);
+
+  // Load history from localStorage whenever wallet changes
   useEffect(() => {
     if (!address) {
       setTradeHistory([]);
@@ -205,31 +215,26 @@ export default function Trade() {
       setWithdrawHistory([]);
       return;
     }
-    const tradeKey = buildHistoryKey("trade", address);
-    const depositKey = buildHistoryKey("deposit", address);
-    const withdrawKey = buildHistoryKey("withdraw", address);
-    setTradeHistory(readHistory<HistoryEntry>(tradeKey));
-    setDepositHistory(readHistory<{ id: string; amount: number; timestamp: number }>(depositKey));
-    setWithdrawHistory(readHistory<{ id: string; amount: number; timestamp: number }>(withdrawKey));
-  }, [address]);
+    skipNextSaveRef.current = true;
+    setTradeHistory(loadFromStorage<HistoryEntry[]>("tradeHistory", []));
+    setDepositHistory(loadFromStorage<Array<{ id: string; amount: number; timestamp: number }>>("depositHistory", []));
+    setWithdrawHistory(loadFromStorage<Array<{ id: string; amount: number; timestamp: number }>>("withdrawHistory", []));
+    queueMicrotask(() => { skipNextSaveRef.current = false; });
+  }, [address]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Persist to localStorage whenever histories change (skip right after load to avoid overwriting)
   useEffect(() => {
-    if (!address) return;
-    const key = buildHistoryKey("trade", address);
-    persistHistory(key, tradeHistory);
-  }, [address, tradeHistory]);
-
+    if (!address || skipNextSaveRef.current) return;
+    saveToStorage("tradeHistory", tradeHistory);
+  }, [tradeHistory, address]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (!address) return;
-    const key = buildHistoryKey("deposit", address);
-    persistHistory(key, depositHistory);
-  }, [address, depositHistory]);
-
+    if (!address || skipNextSaveRef.current) return;
+    saveToStorage("depositHistory", depositHistory);
+  }, [depositHistory, address]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (!address) return;
-    const key = buildHistoryKey("withdraw", address);
-    persistHistory(key, withdrawHistory);
-  }, [address, withdrawHistory]);
+    if (!address || skipNextSaveRef.current) return;
+    saveToStorage("withdrawHistory", withdrawHistory);
+  }, [withdrawHistory, address]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { data: dexBalance, refetch: refetchDexBalance } = useReadContract({
     address: CONTRACTS.DEX,
@@ -279,13 +284,12 @@ export default function Trade() {
   });
 
   const { writeContractAsync: approveTokenAsync } = useWriteContract();
-  const { writeContract: deposit, data: depositHash } = useWriteContract();
-  const { writeContract: withdraw, data: withdrawHash } = useWriteContract();
+  const { writeContractAsync: depositAsync } = useWriteContract();
+  const { writeContractAsync: withdrawAsync, data: withdrawHash } = useWriteContract();
   const { writeContractAsync: openPosAsync, data: openHash } = useWriteContract();
   const { writeContractAsync: increasePosAsync, data: increaseHash } = useWriteContract();
   const { writeContractAsync: closePosAsync, data: closeHash } = useWriteContract();
 
-  const { isLoading: isDepositPending } = useWaitForTransactionReceipt({ hash: depositHash });
   const { isLoading: isWithdrawPending } = useWaitForTransactionReceipt({ hash: withdrawHash });
   const { isLoading: isOpenPending } = useWaitForTransactionReceipt({ hash: openHash });
   const { isLoading: isIncreasePending } = useWaitForTransactionReceipt({ hash: increaseHash });
@@ -294,51 +298,82 @@ export default function Trade() {
 
   const publicClient = usePublicClient();
 
+  const waitOptions = useMemo(() => ({ confirmations: 0 }), []);
+
   const captureTxFee = useCallback(
     async (txPromise: Promise<`0x${string}` | undefined>): Promise<number> => {
       if (!publicClient) throw new Error("No public client");
       const hash = await txPromise;
       if (!hash) throw new Error("Transaction was not sent");
-      const receipt = await publicClient.waitForTransactionReceipt({ hash: hash as `0x${string}` });
+      const receipt = await publicClient.waitForTransactionReceipt({
+        hash: hash as `0x${string}`,
+        ...waitOptions,
+      });
+      if (isTxReverted(receipt.status)) {
+        throw new Error("Transaction failed on-chain");
+      }
       const gasUsed = receipt.gasUsed ?? 0n;
       const gasPrice = receipt.effectiveGasPrice ?? 0n;
       if (gasUsed === 0n || gasPrice === 0n) return 0;
       return Number(formatUnits(gasUsed * gasPrice, 18));
     },
-    [publicClient],
+    [publicClient, waitOptions],
   );
 
   const handleDeposit = async () => {
     if (!depositAmount || !address || !publicClient) return;
+    setTxError(null);
+    setIsDepositing(true);
     const amount = parseUnits(depositAmount, 18);
-    const hash = await approveTokenAsync({ address: CONTRACTS.TOKEN, abi: ERC20_ABI, functionName: "approve", args: [CONTRACTS.DEX, amount] });
-    if (hash) await publicClient.waitForTransactionReceipt({ hash });
-    await deposit({ address: CONTRACTS.DEX, abi: PERPETUAL_DEX_ABI, functionName: "deposit", args: [amount] });
-    setDepositAmount("");
     const depositValue = Number(depositAmount);
-    if (!Number.isNaN(depositValue)) {
-      setDepositHistory((prev) => [
-        { id: crypto.randomUUID?.() ?? `deposit-${Date.now()}`, amount: depositValue, timestamp: Date.now() },
-        ...prev,
-      ]);
+    try {
+      const approveHash = await approveTokenAsync({ address: CONTRACTS.TOKEN, abi: ERC20_ABI, functionName: "approve", args: [CONTRACTS.DEX, amount] });
+      if (approveHash) {
+        const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash, ...waitOptions });
+        if (isTxReverted(approveReceipt.status)) throw new Error("Approve failed on-chain");
+      }
+      const hash = await depositAsync({ address: CONTRACTS.DEX, abi: PERPETUAL_DEX_ABI, functionName: "deposit", args: [amount] });
+      if (!hash) throw new Error("Deposit transaction was not sent");
+      const receipt = await publicClient.waitForTransactionReceipt({ hash, ...waitOptions });
+      if (isTxReverted(receipt.status)) throw new Error("Deposit failed on-chain");
+      setDepositAmount("");
+      if (!Number.isNaN(depositValue)) {
+        setDepositHistory((prev) => [
+          { id: crypto.randomUUID?.() ?? `deposit-${Date.now()}`, amount: depositValue, timestamp: Date.now() },
+          ...prev,
+        ]);
+      }
+    } catch (e) {
+      setTxError(e instanceof Error ? e.message : "Deposit failed");
+    } finally {
+      setIsDepositing(false);
     }
   };
 
   const handleWithdraw = async () => {
-    if (!withdrawAmount) return;
-    await withdraw({ address: CONTRACTS.DEX, abi: PERPETUAL_DEX_ABI, functionName: "withdraw", args: [parseUnits(withdrawAmount, 18)] });
-    setWithdrawAmount("");
+    if (!withdrawAmount || !publicClient) return;
+    setTxError(null);
     const withdrawValue = Number(withdrawAmount);
-    if (!Number.isNaN(withdrawValue)) {
-      setWithdrawHistory((prev) => [
-        { id: crypto.randomUUID?.() ?? `withdraw-${Date.now()}`, amount: withdrawValue, timestamp: Date.now() },
-        ...prev,
-      ]);
+    try {
+      const hash = await withdrawAsync({ address: CONTRACTS.DEX, abi: PERPETUAL_DEX_ABI, functionName: "withdraw", args: [parseUnits(withdrawAmount, 18)] });
+      if (!hash) throw new Error("Withdraw transaction was not sent");
+      const receipt = await publicClient.waitForTransactionReceipt({ hash, ...waitOptions });
+      if (isTxReverted(receipt.status)) throw new Error("Withdraw failed on-chain");
+      setWithdrawAmount("");
+      if (!Number.isNaN(withdrawValue)) {
+        setWithdrawHistory((prev) => [
+          { id: crypto.randomUUID?.() ?? `withdraw-${Date.now()}`, amount: withdrawValue, timestamp: Date.now() },
+          ...prev,
+        ]);
+      }
+    } catch (e) {
+      setTxError(e instanceof Error ? e.message : "Withdraw failed");
     }
   };
 
   const handleOpenPosition = async () => {
     if (!positionAmount) return;
+    setTxError(null);
     const amountStr = positionAmount;
     const priceSnapshot = displayPrice?.price ?? chartPrice?.price ?? null;
     const entryPriceValue = priceSnapshot ?? 0;
@@ -374,8 +409,9 @@ export default function Trade() {
       setTradeHistory((prev) => [newEntry, ...prev]);
       refetchPositions();
       refetchDexBalance();
-    } catch {
+    } catch (e) {
       setPositionAmount(amountStr);
+      setTxError(e instanceof Error ? e.message : "Open position failed");
     } finally {
       setIsSubmittingPosition(false);
     }
@@ -383,6 +419,7 @@ export default function Trade() {
 
   const handleIncreasePosition = async () => {
     if (!positionAmount) return;
+    setTxError(null);
     const amountStr = positionAmount;
     const priceSnapshot = displayPrice?.price ?? chartPrice?.price ?? null;
     const entryPriceValue = priceSnapshot ?? 0;
@@ -429,6 +466,7 @@ export default function Trade() {
   const handleClosePosition = async (market: PolkadotSymbol, amountOverride?: string) => {
     const amountValue = amountOverride ?? closeAmount;
     if (!amountValue) return;
+    setTxError(null);
     const closePrice = displayPrice?.price ?? chartPrice?.price ?? 0;
     const amountNumber = Number(amountValue);
     const entryPriceValue = entryPrice ?? closePrice;
@@ -490,8 +528,9 @@ export default function Trade() {
     });
       refetchPositions();
       refetchDexBalance();
-    } catch {
+    } catch (e) {
       if (!amountOverride) setCloseAmount(amountValue);
+      setTxError(e instanceof Error ? e.message : "Close position failed");
     } finally {
       setIsSubmittingPosition(false);
     }
@@ -1332,6 +1371,15 @@ export default function Trade() {
                 </button>
               </div>
 
+              {txError && (
+                <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-rose-500/50 bg-rose-500/10 px-4 py-2.5 text-sm text-rose-400">
+                  <span>{txError}</span>
+                  <button type="button" onClick={() => setTxError(null)} className="shrink-0 text-rose-400/80 hover:text-rose-300">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                  </button>
+                </div>
+              )}
+
               {activeTab === "trade" ? (
                 <div className="bg-gradient-to-br from-[#1e2033] to-[#16182e] rounded-2xl border border-[#363a59] p-6 shadow-xl">
                 <div className="grid gap-3 mb-4 md:grid-cols-3">
@@ -1507,10 +1555,10 @@ export default function Trade() {
                     />
                     <button
                       onClick={handleDeposit}
-                      disabled={!depositAmount || isDepositPending}
+                      disabled={!depositAmount || isDepositing}
                       className="w-full mt-3 py-3.5 rounded-xl font-semibold bg-blue-500 hover:bg-blue-600 text-white transition disabled:opacity-50"
                     >
-                      {isDepositPending ? "Processing..." : "Deposit"}
+                      {isDepositing ? "Depositing..." : "Deposit"}
                     </button>
                   </div>
                   <div>
