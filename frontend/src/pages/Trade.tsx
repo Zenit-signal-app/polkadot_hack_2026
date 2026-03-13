@@ -409,6 +409,20 @@ export default function Trade() {
       setTradeHistory((prev) => [newEntry, ...prev]);
       refetchPositions();
       refetchDexBalance();
+
+      // Register TP/SL with keeper service (non-blocking)
+      if ((previewTakeProfitPrice ?? null) !== null || (previewStopLossPrice ?? null) !== null) {
+        fetch("http://localhost:3100/orders/tp-sl", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            walletAddress: address,
+            market: chartSymbol,
+            takeProfitPrice: previewTakeProfitPrice ?? null,
+            stopLossPrice: previewStopLossPrice ?? null,
+          }),
+        }).catch(() => {});
+      }
     } catch (e) {
       setPositionAmount(amountStr);
       setTxError(e instanceof Error ? e.message : "Open position failed");

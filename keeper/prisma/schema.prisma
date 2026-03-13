@@ -1,0 +1,81 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Order (position with TP/SL targets) ─────────────────────────────────────
+
+model Order {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Wallet that owns this order
+  walletAddress String
+
+  // Market symbol (e.g. "BTCUSD", "ETHUSD", "DOTUSD")
+  market String
+
+  // Position direction
+  side Side
+
+  // Margin deposited by the user (in zUSDC, stored as string to preserve precision)
+  marginAmount String
+
+  // Leverage multiplier (1–25)
+  leverage Int
+
+  // Effective position size = marginAmount × leverage
+  positionSize String
+
+  // Price at which the position was opened
+  entryPrice Float
+
+  // Estimated liquidation price
+  liquidationPrice Float
+
+  // Absolute take-profit price target
+  takeProfitPrice Float?
+
+  // Absolute stop-loss price target
+  stopLossPrice Float?
+
+  // Current order status
+  status OrderStatus @default(Open)
+
+  // Price at which the order was closed/filled (null while open)
+  closePrice Float?
+
+  // On-chain tx hash for the open transaction
+  openTxHash String?
+
+  // On-chain tx hash for the close/fill transaction
+  closeTxHash String?
+
+  // Timestamp when the position was opened on-chain
+  openedAt DateTime @default(now())
+
+  // Timestamp when the position was closed/filled
+  closedAt DateTime?
+
+  @@index([walletAddress])
+  @@index([status])
+  @@index([market, status])
+}
+
+enum Side {
+  Long
+  Short
+}
+
+enum OrderStatus {
+  Open
+  Closed
+  Filled
+  Liquidated
+  Cancelled
+}
