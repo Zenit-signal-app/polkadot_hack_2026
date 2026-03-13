@@ -91,6 +91,15 @@ const SAMPLE_NEWS: NewsItem[] = [
     link: "https://www.coindesk.com" },
 ];
 
+const X_HANDLES = [
+  { handle: "@VitalikButerin", avatarColor: "#8b5cf6" },
+  { handle: "@cz_binance", avatarColor: "#f59e0b" },
+  { handle: "@aeyakovenko", avatarColor: "#14b8a6" },
+  { handle: "@IOHK_Charles", avatarColor: "#6366f1" },
+  { handle: "@saylor", avatarColor: "#f97316" },
+  { handle: "@haydenzadams", avatarColor: "#e879f9" },
+];
+
 const SAMPLE_X: XPost[] = [
   { id: "x1", author: "Vitalik Buterin", handle: "@VitalikButerin", avatarColor: "#8b5cf6",
     avatarUrl: "https://unavatar.io/twitter/VitalikButerin",
@@ -190,6 +199,34 @@ function parseYTRSS(xml: string, channel: string, color: string): YTVideo[] {
   }
 }
 
+function parseXRSS(xml: string, handle: string, color: string): XPost[] {
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(xml, "text/xml");
+    const entries = Array.from(doc.querySelectorAll("item")).slice(0, 6);
+    const key = handle.replace(/^@/, "");
+    return entries.map((entry, i) => {
+      const getText = (tag: string) => entry.querySelector(tag)?.textContent?.trim() ?? "";
+      const raw = getText("description").replace(/<[^>]+>/g, "").trim();
+      const pub = getText("pubDate");
+      return {
+        id: `${key}-${i}`,
+        author: key.replace(/_/g, " "),
+        handle,
+        content: raw.slice(0, 260) + (raw.length > 260 ? "…" : ""),
+        likes: "—",
+        retweets: "—",
+        time: pub ? new Date(pub).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
+        avatarColor: color,
+        avatarUrl: `https://unavatar.io/twitter/${key}`,
+        tweetUrl: getText("link") || `https://x.com/${key}`,
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 type Tab = "news" | "x" | "youtube";
 
@@ -207,7 +244,7 @@ export default function NewsSidebar() {
   const [open, setOpen]     = useState(false);
   const [tab, setTab]       = useState<Tab>("news");
   const [news, setNews]     = useState<NewsItem[]>(SAMPLE_NEWS);
-  const [xPosts]            = useState<XPost[]>(SAMPLE_X);
+  const [xPosts, setXPosts] = useState<XPost[]>(SAMPLE_X);
   const [videos, setVideos] = useState<YTVideo[]>(SAMPLE_YT);
   const [loading, setLoading] = useState(false);
   const [popup, setPopup]   = useState<PopupItem | null>(null);
@@ -249,6 +286,21 @@ export default function NewsSidebar() {
       }
     }
     if (ytItems.length > 0) setVideos(ytItems.slice(0, 12));
+
+    // X / Twitter RSS (via Nitter)
+    const xItems: XPost[] = [];
+    for (const source of X_HANDLES) {
+      const handleKey = source.handle.replace(/^@/, "");
+      try {
+        const rssUrl = `https://nitter.net/${handleKey}/rss`;
+        const res = await fetch(`${PROXY}${encodeURIComponent(rssUrl)}`);
+        const json = await res.json();
+        xItems.push(...parseXRSS(json.contents as string, source.handle, source.avatarColor));
+      } catch {
+        /* fall through */
+      }
+    }
+    if (xItems.length > 0) setXPosts(xItems.slice(0, 12));
 
     setLoading(false);
   }, []);

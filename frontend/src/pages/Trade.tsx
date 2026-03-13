@@ -101,6 +101,33 @@ function formatTimestamp(timestamp: number) {
   return `${TIME_FORMATTER.format(date)} ${DATE_PART_FORMATTER.format(date)}`;
 }
 
+const HISTORY_STORAGE_PREFIX = "zenit-history";
+function buildHistoryKey(type: "trade" | "deposit" | "withdraw", wallet?: string) {
+  if (!wallet) return "";
+  return `${HISTORY_STORAGE_PREFIX}-${type}-${wallet.toLowerCase()}`;
+}
+function readHistory<T>(key: string): T[] {
+  if (!key) return [];
+  if (typeof window === "undefined") return [];
+  const raw = window.localStorage.getItem(key);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+function persistHistory<T>(key: string, data: T[]) {
+  if (!key) return;
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(data));
+  } catch {
+    // ignore
+  }
+}
+
 function calculatePnL(entry: HistoryEntry, currentPrice?: number) {
   if (!entry.entryPrice) return null;
   const referencePrice =
@@ -170,6 +197,39 @@ export default function Trade() {
   const [tradeHistory, setTradeHistory] = useState<HistoryEntry[]>([]);
   const [depositHistory, setDepositHistory] = useState<Array<{ id: string; amount: number; timestamp: number }>>([]);
   const [withdrawHistory, setWithdrawHistory] = useState<Array<{ id: string; amount: number; timestamp: number }>>([]);
+
+  useEffect(() => {
+    if (!address) {
+      setTradeHistory([]);
+      setDepositHistory([]);
+      setWithdrawHistory([]);
+      return;
+    }
+    const tradeKey = buildHistoryKey("trade", address);
+    const depositKey = buildHistoryKey("deposit", address);
+    const withdrawKey = buildHistoryKey("withdraw", address);
+    setTradeHistory(readHistory<HistoryEntry>(tradeKey));
+    setDepositHistory(readHistory<{ id: string; amount: number; timestamp: number }>(depositKey));
+    setWithdrawHistory(readHistory<{ id: string; amount: number; timestamp: number }>(withdrawKey));
+  }, [address]);
+
+  useEffect(() => {
+    if (!address) return;
+    const key = buildHistoryKey("trade", address);
+    persistHistory(key, tradeHistory);
+  }, [address, tradeHistory]);
+
+  useEffect(() => {
+    if (!address) return;
+    const key = buildHistoryKey("deposit", address);
+    persistHistory(key, depositHistory);
+  }, [address, depositHistory]);
+
+  useEffect(() => {
+    if (!address) return;
+    const key = buildHistoryKey("withdraw", address);
+    persistHistory(key, withdrawHistory);
+  }, [address, withdrawHistory]);
 
   const { data: dexBalance, refetch: refetchDexBalance } = useReadContract({
     address: CONTRACTS.DEX,
