@@ -29,6 +29,7 @@ interface XPost {
   retweets: string;
   time: string;
   avatarColor: string;
+  avatarUrl?: string;
   tweetUrl: string;
 }
 
@@ -92,26 +93,32 @@ const SAMPLE_NEWS: NewsItem[] = [
 
 const SAMPLE_X: XPost[] = [
   { id: "x1", author: "Vitalik Buterin", handle: "@VitalikButerin", avatarColor: "#8b5cf6",
+    avatarUrl: "https://unavatar.io/twitter/VitalikButerin",
     tweetUrl: "https://twitter.com/VitalikButerin",
     content: "Ethereum should be used as a simple digital bulletin board. Stop forcing blockchain into every problem and start treating it as a reliable, shared memory for the digital world. The goal is maximal simplicity and maximum reliability.",
     likes: "12.4K", retweets: "3.2K", time: "2h" },
   { id: "x2", author: "CZ 🔶 Binance", handle: "@cz_binance", avatarColor: "#f59e0b",
+    avatarUrl: "https://unavatar.io/twitter/cz_binance",
     tweetUrl: "https://twitter.com/cz_binance",
     content: "Crypto is more resilient than people think. Every major drawdown has been followed by a stronger recovery. Stay #SAFU. Build. Don't panic sell. The ecosystem is fundamentally stronger than ever.",
     likes: "28.1K", retweets: "5.6K", time: "4h" },
   { id: "x3", author: "Anatoly Yakovenko", handle: "@aeyakovenko", avatarColor: "#14b8a6",
+    avatarUrl: "https://unavatar.io/twitter/aeyakovenko",
     tweetUrl: "https://twitter.com/aeyakovenko",
     content: "Solana TPS just hit a new all-time record during the latest stress test. The network handled it beautifully. This is what permissionless global scale looks like. We're just getting started.",
     likes: "9.3K", retweets: "1.8K", time: "5h" },
   { id: "x4", author: "Charles Hoskinson", handle: "@IOHK_Charles", avatarColor: "#6366f1",
+    avatarUrl: "https://unavatar.io/twitter/IOHK_Charles",
     tweetUrl: "https://twitter.com/IOHK_Charles",
     content: "Cardano's governance is live. On-chain voting, treasury management, and constitutional committee are now operational. This is what blockchain democracy looks like. Voltaire era has arrived.",
     likes: "7.2K", retweets: "1.4K", time: "6h" },
   { id: "x5", author: "Michael Saylor", handle: "@saylor", avatarColor: "#f97316",
+    avatarUrl: "https://unavatar.io/twitter/saylor",
     tweetUrl: "https://twitter.com/saylor",
     content: "Bitcoin is the exit. Every other asset depreciates relative to hard money over a long enough time horizon. The question is not if, but how much Bitcoin you own.",
     likes: "31.5K", retweets: "7.8K", time: "8h" },
   { id: "x6", author: "Hayden Adams", handle: "@haydenzadams", avatarColor: "#e879f9",
+    avatarUrl: "https://unavatar.io/twitter/haydenzadams",
     tweetUrl: "https://twitter.com/haydenzadams",
     content: "Uniswap v4 hooks are unlocking entirely new categories of AMM design. The permissive architecture means anyone can build on top of the liquidity pool. DeFi composability at its best.",
     likes: "5.1K", retweets: "1.1K", time: "10h" },
@@ -282,6 +289,35 @@ export default function NewsSidebar() {
     );
   }
 
+function XAvatar({ item, size = 28 }: { item: XPost; size?: number }) {
+  const fallback = item.author[0];
+  const handleKey = item.handle.replace(/^@/, "");
+  const avatarSrc = item.avatarUrl ?? (handleKey ? `https://unavatar.io/twitter/${handleKey}` : undefined);
+  const [showImage, setShowImage] = useState(Boolean(avatarSrc));
+  return (
+    <span
+      className="relative flex items-center justify-center rounded-full text-[11px] font-bold text-white overflow-hidden"
+      style={{
+        width: size,
+        height: size,
+        background: item.avatarColor,
+        border: "1px solid rgba(255,255,255,0.08)",
+      }}
+    >
+      {!showImage && <span className="relative z-10">{fallback}</span>}
+      {avatarSrc && (
+        <img
+          src={avatarSrc}
+          alt={`${item.author} avatar`}
+          className={`absolute inset-0 h-full w-full object-cover ${showImage ? "opacity-100" : "opacity-0"}`}
+          onError={() => setShowImage(false)}
+          onLoad={() => setShowImage(true)}
+        />
+      )}
+    </span>
+  );
+}
+
   function NewsCard({ item }: { item: NewsItem }) {
     const tooltipNode = (
       <div style={{ boxShadow: `0 0 24px ${item.sourceColor}22` }}>
@@ -320,7 +356,7 @@ export default function NewsSidebar() {
     const tooltipNode = (
       <div>
         <div className="flex items-center gap-2 mb-2">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white" style={{ background: item.avatarColor }}>{item.author[0]}</span>
+          <XAvatar item={item} size={28} />
           <div>
             <p className="text-[12px] font-semibold text-white">{item.author}</p>
             <p className="text-[9px] text-slate-500">{item.handle} · {item.time}</p>
@@ -339,9 +375,7 @@ export default function NewsSidebar() {
         onMouseLeave={onCardLeave}
       >
         <div className="flex items-center gap-2 mb-2">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white" style={{ background: item.avatarColor }}>
-            {item.author[0]}
-          </span>
+          <XAvatar item={item} size={30} />
           <div className="min-w-0">
             <p className="text-[11px] font-semibold text-white truncate">{item.author}</p>
             <p className="text-[9px] text-slate-500">{item.handle} · {item.time}</p>
