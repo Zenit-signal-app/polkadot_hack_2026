@@ -25,6 +25,7 @@ type FaucetState =
   | { status: "idle" }
   | { status: "checking" }
   | { status: "sending" }
+  | { status: "confirming"; txHash: string }
   | { status: "success"; txHash: string }
   | { status: "error"; message: string };
 
@@ -196,6 +197,10 @@ function markLocalCooldown(addr: string) {
   } catch { /* quota */ }
 }
 
+function clearAllCooldowns() {
+  try { localStorage.removeItem(COOLDOWN_KEY); } catch { /* ignore */ }
+}
+
 function Step3() {
   const [walletInput, setWalletInput] = useState("");
   const [faucet, setFaucet] = useState<FaucetState>({ status: "idle" });
@@ -226,58 +231,80 @@ function Step3() {
 
     setFaucet({ status: "sending" });
     try {
-      // Build provider + wallet
       const provider = new ethers.JsonRpcProvider(RPC_URL, {
         chainId: CHAIN_ID,
         name: "polkadot-hub-testnet",
       });
+      // Polkadot EVM testnet has ~6s block time; poll every 4s
+      provider.pollingInterval = 4000;
       const senderWallet = new ethers.Wallet(faucetKey.trim(), provider);
 
+      // ── Helper: read balanceOf via low-level call ─────────────────────────
+      async function getBalance(who: string): Promise<bigint> {
+        const cd = ERC20_IFACE.encodeFunctionData("balanceOf", [who]);
+        const raw = await provider.call({ to: ZUSDC_ADDRESS, data: cd });
+        const [bal] = ERC20_IFACE.decodeFunctionResult("balanceOf", raw);
+        return bal as bigint;
+      }
+
       // ── Step A: check faucet wallet has enough zUSDC ──────────────────────
-      // Use low-level staticCall to avoid any Contract proxy issues
-      const balCalldata = ERC20_IFACE.encodeFunctionData("balanceOf", [senderWallet.address]);
-      const balResult = await provider.call({ to: ZUSDC_ADDRESS, data: balCalldata });
-      const [balance] = ERC20_IFACE.decodeFunctionResult("balanceOf", balResult);
-      if ((balance as bigint) < FAUCET_AMOUNT) {
+      const faucetBal = await getBalance(senderWallet.address);
+      if (faucetBal < FAUCET_AMOUNT) {
         setFaucet({
           status: "error",
-          message: `Faucet wallet balance is ${ethers.formatUnits(balance as bigint, 18)} zUSDC — not enough to send 1000. Please contact the admin.`,
+          message: `Faucet wallet balance is ${ethers.formatUnits(faucetBal, 18)} zUSDC — not enough to send 1,000. Please contact the admin.`,
         });
         return;
       }
 
-      // ── Step B: encode transfer(addr, 1000 zUSDC) calldata explicitly ─────
+      // ── Step B: check recipient balance BEFORE transfer ───────────────────
+      const recipientBalBefore = await getBalance(addr);
+
+      // ── Step C: encode transfer calldata ──────────────────────────────────
       const transferCalldata = ERC20_IFACE.encodeFunctionData("transfer", [addr, FAUCET_AMOUNT]);
 
-      // ── Step C: estimate gas to catch reverts before broadcast ────────────
-      let gasLimit = 120_000n;
+      // ── Step D: estimate gas to catch reverts before broadcast ─────────────
+      let gasLimit = 150_000n;
       try {
         const estimated = await provider.estimateGas({
           from: senderWallet.address,
           to: ZUSDC_ADDRESS,
           data: transferCalldata,
         });
-        gasLimit = (estimated * 130n) / 100n; // 30% buffer
+        gasLimit = (estimated * 150n) / 100n; // 50% buffer for safety
       } catch (estimateErr) {
         const em = estimateErr instanceof Error ? estimateErr.message : String(estimateErr);
         setFaucet({
           status: "error",
-          message: `Gas estimation failed — transfer would likely revert: ${em.slice(0, 150)}`,
+          message: `Gas estimation failed — transfer would revert: ${em.slice(0, 150)}`,
         });
         return;
       }
 
-      // ── Step D: send raw transaction with explicit calldata ───────────────
+      // ── Step E: broadcast transaction ─────────────────────────────────────
       const tx = await senderWallet.sendTransaction({
         to: ZUSDC_ADDRESS,
         data: transferCalldata,
         gasLimit,
       });
 
-      // ── Step E: wait for on-chain confirmation ────────────────────────────
+      // Show TX hash immediately so user can track on Blockscout
+      setFaucet({ status: "confirming", txHash: tx.hash });
+
+      // ── Step F: wait for on-chain confirmation (up to 5 min) ──────────────
       const receipt = await tx.wait(1);
       if (!receipt || receipt.status !== 1) {
         setFaucet({ status: "error", message: `Transaction reverted on-chain. Hash: ${tx.hash}` });
+        return;
+      }
+
+      // ── Step G: verify recipient balance actually increased ───────────────
+      const recipientBalAfter = await getBalance(addr);
+      if (recipientBalAfter <= recipientBalBefore) {
+        setFaucet({
+          status: "error",
+          message: `TX confirmed (${tx.hash}) but recipient balance did not increase. The token contract may have issues.`,
+        });
         return;
       }
 
@@ -336,17 +363,42 @@ function Step3() {
       <button
         type="button"
         onClick={handleClaim}
-        disabled={!isValidAddr || faucet.status === "sending" || faucet.status === "checking" || faucet.status === "success"}
+        disabled={!isValidAddr || faucet.status === "sending" || faucet.status === "checking" || faucet.status === "confirming" || faucet.status === "success"}
         className="w-full py-3 rounded-xl font-semibold text-sm transition disabled:opacity-50 disabled:cursor-not-allowed bg-blue-600 hover:bg-blue-500 text-white"
       >
         {faucet.status === "checking"
           ? "Checking eligibility…"
           : faucet.status === "sending"
-          ? "Sending 1000 zUSDC…"
+          ? "Broadcasting transaction…"
+          : faucet.status === "confirming"
+          ? "⏳ Waiting for on-chain confirmation…"
           : faucet.status === "success"
-          ? "✓ 1000 zUSDC Sent!"
-          : "Get 1000 zUSDC"}
+          ? "✓ 1,000 zUSDC Sent!"
+          : "Get 1,000 zUSDC"}
       </button>
+
+      {/* Confirming — TX broadcast, waiting for block */}
+      {faucet.status === "confirming" && (
+        <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4 text-sm space-y-2">
+          <div className="flex items-center gap-2 text-amber-400 font-semibold">
+            <svg className="h-5 w-5 shrink-0 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <circle cx="12" cy="12" r="10" strokeDasharray="31.4 31.4" strokeLinecap="round" />
+            </svg>
+            Transaction sent — waiting for confirmation…
+          </div>
+          <p className="text-slate-400 text-xs">
+            Polkadot EVM Testnet can take 1–3 minutes to confirm. You can track the transaction:
+          </p>
+          <a
+            href={`${EXPLORER}/tx/${faucet.txHash}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block text-blue-400 text-xs hover:text-blue-300 hover:underline font-mono break-all"
+          >
+            {faucet.txHash}
+          </a>
+        </div>
+      )}
 
       {/* Success */}
       {faucet.status === "success" && (
@@ -389,11 +441,29 @@ function Step3() {
 
       {/* Error */}
       {faucet.status === "error" && (
-        <div className="rounded-xl border border-rose-500/40 bg-rose-500/5 p-3 text-xs">
-          <p className="text-rose-400 font-semibold mb-1">Request failed</p>
+        <div className="rounded-xl border border-rose-500/40 bg-rose-500/5 p-3 text-xs space-y-2">
+          <p className="text-rose-400 font-semibold">Request failed</p>
           <p className="text-slate-400">{faucet.message}</p>
+          {faucet.message.includes("24h") && (
+            <button
+              type="button"
+              onClick={() => { clearAllCooldowns(); setFaucet({ status: "idle" }); }}
+              className="text-amber-400 hover:text-amber-300 underline text-xs"
+            >
+              Reset cooldown and try again
+            </button>
+          )}
         </div>
       )}
+
+      {/* Reset all cooldowns link */}
+      <button
+        type="button"
+        onClick={() => { clearAllCooldowns(); setFaucet({ status: "idle" }); }}
+        className="text-slate-600 hover:text-slate-400 text-[10px] underline transition"
+      >
+        Reset faucet cooldown history
+      </button>
     </div>
   );
 }
