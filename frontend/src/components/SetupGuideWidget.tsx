@@ -1,9 +1,19 @@
 import { useState, useCallback } from "react";
+import { ethers } from "ethers";
 
-const KEEPER_API = "http://localhost:3100";
 const ZUSDC_ADDRESS = "0x277E42B9454fB36A7Eaa52D4cE332bEF71dd017a";
 const EXPLORER = "https://blockscout-testnet.polkadot.io";
 const YOUTUBE_LINK = "https://www.youtube.com/watch?v=tJ2measnTc0&list=RDtJ2measnTc0&start_radio=1";
+const RPC_URL = "https://eth-rpc-testnet.polkadot.io/";
+const CHAIN_ID = 420420417;
+const FAUCET_AMOUNT = ethers.parseUnits("1000", 18);
+const COOLDOWN_KEY = "zenit:faucet:cooldown";
+const COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+const ERC20_ABI = [
+  "function transfer(address to, uint256 amount) returns (bool)",
+  "function balanceOf(address account) view returns (uint256)",
+] as const;
 
 type Step = 1 | 2 | 3;
 
@@ -158,6 +168,30 @@ function Step2() {
 
 // ─── Step 3: Get zUSDC ──────────────────────────────────────────────────────
 
+function checkLocalCooldown(addr: string): { ok: boolean; remainingHours: number } {
+  try {
+    const raw = localStorage.getItem(COOLDOWN_KEY);
+    if (!raw) return { ok: true, remainingHours: 0 };
+    const map: Record<string, number> = JSON.parse(raw);
+    const last = map[addr.toLowerCase()];
+    if (!last) return { ok: true, remainingHours: 0 };
+    const elapsed = Date.now() - last;
+    if (elapsed >= COOLDOWN_MS) return { ok: true, remainingHours: 0 };
+    return { ok: false, remainingHours: Math.ceil((COOLDOWN_MS - elapsed) / 3_600_000) };
+  } catch {
+    return { ok: true, remainingHours: 0 };
+  }
+}
+
+function markLocalCooldown(addr: string) {
+  try {
+    const raw = localStorage.getItem(COOLDOWN_KEY);
+    const map: Record<string, number> = raw ? JSON.parse(raw) : {};
+    map[addr.toLowerCase()] = Date.now();
+    localStorage.setItem(COOLDOWN_KEY, JSON.stringify(map));
+  } catch { /* quota */ }
+}
+
 function Step3() {
   const [walletInput, setWalletInput] = useState("");
   const [faucet, setFaucet] = useState<FaucetState>({ status: "idle" });
@@ -168,42 +202,60 @@ function Step3() {
     if (!isValidAddr) return;
     const addr = walletInput.trim();
 
+    // 1. Check 24h cooldown stored in localStorage
     setFaucet({ status: "checking" });
-    try {
-      // Check cooldown first
-      const statusRes = await fetch(`${KEEPER_API}/faucet/status?wallet=${addr}`);
-      if (statusRes.ok) {
-        const statusData = await statusRes.json() as { canClaim: boolean; remainingHours?: number };
-        if (!statusData.canClaim) {
-          setFaucet({
-            status: "error",
-            message: `This wallet already claimed zUSDC. Please try again in ~${statusData.remainingHours ?? 24}h.`,
-          });
-          return;
-        }
-      }
-
-      setFaucet({ status: "sending" });
-      const res = await fetch(`${KEEPER_API}/faucet/zusdc`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ walletAddress: addr }),
+    const cooldown = checkLocalCooldown(addr);
+    if (!cooldown.ok) {
+      setFaucet({
+        status: "error",
+        message: `This wallet already claimed zUSDC within 24h. Try again in ~${cooldown.remainingHours}h.`,
       });
-      const data = await res.json() as { success?: boolean; txHash?: string; error?: string; remainingHours?: number };
+      return;
+    }
 
-      if (!res.ok || !data.success) {
-        setFaucet({
-          status: "error",
-          message: data.error ?? "Faucet request failed. Please try again later.",
-        });
+    // 2. Read faucet private key from Vite env
+    const faucetKey = import.meta.env.VITE_FAUCET_PRIVATE_KEY as string | undefined;
+    if (!faucetKey || faucetKey.length < 10) {
+      setFaucet({ status: "error", message: "Faucet is not configured. VITE_FAUCET_PRIVATE_KEY missing in .env." });
+      return;
+    }
+
+    setFaucet({ status: "sending" });
+    try {
+      const provider = new ethers.JsonRpcProvider(RPC_URL, {
+        chainId: CHAIN_ID,
+        name: "polkadot-hub-testnet",
+      });
+      const wallet = new ethers.Wallet(faucetKey.trim(), provider);
+      const token = new ethers.Contract(ZUSDC_ADDRESS, ERC20_ABI, wallet);
+
+      // Check faucet balance
+      const balance: bigint = await (token.balanceOf as (a: string) => Promise<bigint>)(wallet.address);
+      if (balance < FAUCET_AMOUNT) {
+        setFaucet({ status: "error", message: "Faucet wallet has insufficient zUSDC balance. Please contact the admin." });
         return;
       }
 
-      setFaucet({ status: "success", txHash: data.txHash ?? "" });
-    } catch {
+      const tx: ethers.TransactionResponse = await (token.transfer as (to: string, amt: bigint, opts: object) => Promise<ethers.TransactionResponse>)(
+        addr,
+        FAUCET_AMOUNT,
+        { gasLimit: 120_000n },
+      );
+
+      // Wait for 1 confirmation
+      const receipt = await tx.wait(1);
+      if (!receipt || receipt.status !== 1) {
+        setFaucet({ status: "error", message: "Transaction reverted on-chain. Please try again." });
+        return;
+      }
+
+      markLocalCooldown(addr);
+      setFaucet({ status: "success", txHash: receipt.hash });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
       setFaucet({
         status: "error",
-        message: "Cannot reach the faucet service. Make sure the keeper is running on port 3100.",
+        message: msg.length > 200 ? msg.slice(0, 200) + "…" : msg,
       });
     }
   }, [walletInput, isValidAddr]);
