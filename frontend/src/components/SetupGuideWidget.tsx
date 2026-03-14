@@ -444,15 +444,6 @@ function Step3() {
         <div className="rounded-xl border border-rose-500/40 bg-rose-500/5 p-3 text-xs space-y-2">
           <p className="text-rose-400 font-semibold">Request failed</p>
           <p className="text-slate-400">{faucet.message}</p>
-          {faucet.message.includes("24h") && (
-            <button
-              type="button"
-              onClick={() => { clearAllCooldowns(); setFaucet({ status: "idle" }); }}
-              className="text-amber-400 hover:text-amber-300 underline text-xs"
-            >
-              Reset cooldown and try again
-            </button>
-          )}
         </div>
       )}
 
