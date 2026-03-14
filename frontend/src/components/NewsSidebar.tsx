@@ -92,12 +92,24 @@ const SAMPLE_NEWS: NewsItem[] = [
 ];
 
 const X_HANDLES = [
+  // ── KOLs / Founders ──
   { handle: "@VitalikButerin", avatarColor: "#8b5cf6" },
   { handle: "@cz_binance", avatarColor: "#f59e0b" },
   { handle: "@aeyakovenko", avatarColor: "#14b8a6" },
   { handle: "@IOHK_Charles", avatarColor: "#6366f1" },
   { handle: "@saylor", avatarColor: "#f97316" },
   { handle: "@haydenzadams", avatarColor: "#e879f9" },
+  // ── Foundation / Protocol official accounts ──
+  { handle: "@Polkadot", avatarColor: "#e6007a" },
+  { handle: "@solana", avatarColor: "#9945ff" },
+  { handle: "@ethereum", avatarColor: "#627eea" },
+  { handle: "@Aptos", avatarColor: "#2dd4bf" },
+  { handle: "@BNBCHAIN", avatarColor: "#f0b90b" },
+  { handle: "@nearprotocol", avatarColor: "#00ec97" },
+  { handle: "@SuiNetwork", avatarColor: "#4da2ff" },
+  { handle: "@cosmos", avatarColor: "#6f7390" },
+  { handle: "@arbitrum", avatarColor: "#28a0f0" },
+  { handle: "@Optimism", avatarColor: "#ff0420" },
 ];
 
 const SAMPLE_X: XPost[] = [
@@ -131,6 +143,36 @@ const SAMPLE_X: XPost[] = [
     tweetUrl: "https://twitter.com/haydenzadams",
     content: "Uniswap v4 hooks are unlocking entirely new categories of AMM design. The permissive architecture means anyone can build on top of the liquidity pool. DeFi composability at its best.",
     likes: "5.1K", retweets: "1.1K", time: "10h" },
+  { id: "x7", author: "Polkadot", handle: "@Polkadot", avatarColor: "#e6007a",
+    avatarUrl: "https://unavatar.io/twitter/Polkadot",
+    tweetUrl: "https://twitter.com/Polkadot",
+    content: "Polkadot 2.0 is here. Agile Coretime, async backing, and elastic scaling are live. Build cross-chain apps with shared security and zero gas wars. The multi-chain future starts now.",
+    likes: "6.8K", retweets: "2.1K", time: "3h" },
+  { id: "x8", author: "Solana", handle: "@solana", avatarColor: "#9945ff",
+    avatarUrl: "https://unavatar.io/twitter/solana",
+    tweetUrl: "https://twitter.com/solana",
+    content: "Firedancer validator client is going live on mainnet. Dual-client diversity makes Solana one of the most resilient L1s. Speed + reliability = unstoppable.",
+    likes: "14.2K", retweets: "3.9K", time: "4h" },
+  { id: "x9", author: "Ethereum", handle: "@ethereum", avatarColor: "#627eea",
+    avatarUrl: "https://unavatar.io/twitter/ethereum",
+    tweetUrl: "https://twitter.com/ethereum",
+    content: "EIP-4844 blobs have reduced L2 costs by 100x. Ethereum's rollup-centric roadmap is delivering real results for users. The modular future is here.",
+    likes: "18.5K", retweets: "4.7K", time: "5h" },
+  { id: "x10", author: "Aptos", handle: "@Aptos", avatarColor: "#2dd4bf",
+    avatarUrl: "https://unavatar.io/twitter/Aptos",
+    tweetUrl: "https://twitter.com/Aptos",
+    content: "Aptos just processed 30,000 TPS in the latest benchmark. Move language + Block-STM parallel execution engine is the real deal for on-chain performance.",
+    likes: "4.3K", retweets: "980", time: "6h" },
+  { id: "x11", author: "BNB Chain", handle: "@BNBCHAIN", avatarColor: "#f0b90b",
+    avatarUrl: "https://unavatar.io/twitter/BNBCHAIN",
+    tweetUrl: "https://twitter.com/BNBCHAIN",
+    content: "BNB Chain opBNB processes 4,000+ TPS with sub-cent fees. Combined with Greenfield for decentralized storage, the full-stack Web3 infra is ready. Build and ship.",
+    likes: "8.1K", retweets: "2.3K", time: "7h" },
+  { id: "x12", author: "Arbitrum", handle: "@arbitrum", avatarColor: "#28a0f0",
+    avatarUrl: "https://unavatar.io/twitter/arbitrum",
+    tweetUrl: "https://twitter.com/arbitrum",
+    content: "Arbitrum Stylus is live — write smart contracts in Rust, C, C++ alongside Solidity. EVM+ is the next evolution. Lower gas, faster execution, more languages.",
+    likes: "7.5K", retweets: "1.9K", time: "9h" },
 ];
 
 const SAMPLE_YT: YTVideo[] = [
