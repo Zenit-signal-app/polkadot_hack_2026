@@ -246,10 +246,24 @@ const WORLD_CITIES = [
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function CryptoEventsGlobe() {
   const [open, setOpen]       = useState(false);
+  // hovered: follows mouse (pointer-events: none)
   const [hovered, setHovered] = useState<CityPoint | null>(null);
+  // pinned: locked on click (pointer-events: auto, has X button)
+  const [pinned, setPinned]   = useState<CityPoint | null>(null);
+  const [pinnedPos, setPinnedPos] = useState({ x: 0, y: 0 });
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [dimensions, setDimensions] = useState({ w: 0, h: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
+  // Debounce timer for clearing hover — prevents flicker when mouse briefly leaves the point
+  const hoverClearTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  // Reset pinned state when overlay closes
+  useEffect(() => {
+    if (!open) {
+      setPinned(null);
+      setHovered(null);
+    }
+  }, [open]);
 
   // Compute window size for Globe
   useEffect(() => {
@@ -263,22 +277,47 @@ export default function CryptoEventsGlobe() {
 
   // Close on Escape
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (pinned) setPinned(null);
+        else setOpen(false);
+      }
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [pinned]);
 
   // Track mouse for tooltip positioning
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     setMousePos({ x: e.clientX, y: e.clientY });
   }, []);
 
+  // Debounced hover handler — clears only after 200 ms of no hover signal
+  const handlePointHover = useCallback((point: any) => {
+    clearTimeout(hoverClearTimer.current);
+    if (point && (point as CityPoint).events?.length > 0) {
+      setHovered(point as CityPoint);
+    } else {
+      hoverClearTimer.current = setTimeout(() => setHovered(null), 200);
+    }
+  }, []);
+
+  // Click on a point → pin the info box at current mouse position
+  const handlePointClick = useCallback((point: any) => {
+    if (point && (point as CityPoint).events?.length > 0) {
+      setPinned(point as CityPoint);
+      setPinnedPos({ x: mousePos.x, y: mousePos.y });
+      setHovered(null);
+    }
+  }, [mousePos]);
+
   // Build point data for globe
   const eventPoints = CITY_EVENTS.map((c) => ({
     ...c,
     color: "#ffd700",
     altitude: 0.06,
-    radius: 0.6,
+    // Larger radius = larger hover hit area → no more flicker
+    radius: 1.5,
   }));
 
   const bgPoints = WORLD_CITIES.map((c) => ({
@@ -286,7 +325,7 @@ export default function CryptoEventsGlobe() {
     events: [],
     color: "#1e3a5f",
     altitude: 0.01,
-    radius: 0.3,
+    radius: 0.4,
   }));
 
   const allPoints = [...bgPoints, ...eventPoints];
@@ -296,19 +335,20 @@ export default function CryptoEventsGlobe() {
 
   // Tooltip positioning — keep inside viewport
   const TOOLTIP_W = 320;
-  const TOOLTIP_H = 200;
-  const tooltipLeft = mousePos.x + 18 + TOOLTIP_W > window.innerWidth
-    ? mousePos.x - TOOLTIP_W - 12
-    : mousePos.x + 18;
-  const tooltipTop = mousePos.y + TOOLTIP_H > window.innerHeight
-    ? mousePos.y - TOOLTIP_H - 12
-    : mousePos.y + 12;
+  const clampX = (x: number) =>
+    x + 20 + TOOLTIP_W > window.innerWidth ? x - TOOLTIP_W - 14 : x + 20;
+  const clampY = (y: number, h: number) =>
+    y + h + 12 > window.innerHeight ? y - h - 12 : y + 12;
+
+  // The tooltip data to show: pinned takes priority over hovered
+  const activeCity = pinned ?? hovered;
+  const isPinned   = !!pinned;
 
   return (
     <>
-      {/* ── Trigger button (below News button) ───────────────────────────── */}
+      {/* ── Trigger / toggle button — same style as NEWS button ─────────── */}
       <button
-        onClick={() => setOpen(true)}
+        onClick={() => setOpen((v) => !v)}
         className="fixed right-0 z-[90] flex flex-col items-center gap-1.5 rounded-l-2xl px-2 py-4 text-white transition-all duration-300"
         style={{
           top: "62%",
@@ -370,7 +410,8 @@ export default function CryptoEventsGlobe() {
                   Crypto Events World Map
                 </h1>
                 <p className="text-slate-500 text-[10px]">
-                  {CITY_EVENTS.length} cities · {CITY_EVENTS.reduce((s, c) => s + c.events.length, 0)} upcoming events · Hover a city to explore
+                  {CITY_EVENTS.length} cities · {CITY_EVENTS.reduce((s, c) => s + c.events.length, 0)} upcoming events
+                  {isPinned ? " · Click elsewhere on globe to unpin" : " · Hover a city · Click to pin & open links"}
                 </p>
               </div>
             </div>
@@ -398,10 +439,11 @@ export default function CryptoEventsGlobe() {
                 Source: CoinMarketCap Events ↗
               </a>
 
-              {/* Close */}
+              {/* Close overlay — same style as the News sidebar close button */}
               <button
                 onClick={() => setOpen(false)}
                 className="flex h-9 w-9 items-center justify-center rounded-xl border border-[#363a59] text-slate-400 hover:text-white hover:bg-white/10 transition"
+                title="Close Events Globe (Esc)"
               >
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                   <path d="M1 1l12 12M13 1L1 13"/>
@@ -438,13 +480,8 @@ export default function CryptoEventsGlobe() {
                 pointRadius={(d: any) => d.radius}
                 pointResolution={12}
                 pointsMerge={false}
-                onPointHover={(point: any) => {
-                  if (point && (point as CityPoint).events?.length > 0) {
-                    setHovered(point as CityPoint);
-                  } else {
-                    setHovered(null);
-                  }
-                }}
+                onPointHover={handlePointHover}
+                onPointClick={handlePointClick}
                 ringsData={rings}
                 ringColor={() => ["rgba(255,215,0,0)", "rgba(255,215,0,0.5)", "rgba(255,215,0,0)"]}
                 ringMaxRadius={3}
@@ -463,72 +500,106 @@ export default function CryptoEventsGlobe() {
             )}
           </Suspense>
 
-          {/* Hover tooltip */}
-          {hovered && (
-            <div
-              className="pointer-events-none fixed z-20 rounded-2xl border border-[#363a59] bg-[#0a0c1a]/95 p-4 shadow-2xl backdrop-blur-sm"
-              style={{
-                left: tooltipLeft,
-                top: tooltipTop,
-                width: TOOLTIP_W,
-                boxShadow: "0 8px 40px rgba(0,0,0,0.8), 0 0 0 1px rgba(230,0,122,0.2)",
-              }}
-            >
-              {/* City header */}
-              <div className="flex items-center gap-2 mb-3">
-                <span
-                  className="h-2.5 w-2.5 rounded-full shrink-0"
-                  style={{ background: "#ffd700", boxShadow: "0 0 8px #ffd700" }}
-                />
-                <div>
-                  <p className="text-white font-bold text-sm leading-tight">{hovered.city}</p>
-                  <p className="text-slate-500 text-[9px]">{hovered.country} · {hovered.events.length} event{hovered.events.length > 1 ? "s" : ""}</p>
+          {/* ── Tooltip / Info box ────────────────────────────────────────── */}
+          {activeCity && (() => {
+            // Estimated height of content for clamping
+            const estimatedH = 80 + activeCity.events.length * 120;
+            const boxLeft = isPinned ? clampX(pinnedPos.x) : clampX(mousePos.x);
+            const boxTop  = isPinned ? clampY(pinnedPos.y, estimatedH) : clampY(mousePos.y, estimatedH);
+            return (
+              <div
+                className="fixed z-20 rounded-2xl border bg-[#0a0c1a]/97 p-4 shadow-2xl backdrop-blur-sm"
+                style={{
+                  left: boxLeft,
+                  top: boxTop,
+                  width: TOOLTIP_W,
+                  // Pinned: fully interactive so links work; hover: no pointer events
+                  pointerEvents: isPinned ? "auto" : "none",
+                  borderColor: isPinned ? "rgba(230,0,122,0.5)" : "rgba(54,58,89,0.7)",
+                  boxShadow: isPinned
+                    ? "0 8px 40px rgba(0,0,0,0.9), 0 0 0 1px rgba(230,0,122,0.35)"
+                    : "0 8px 40px rgba(0,0,0,0.8), 0 0 0 1px rgba(230,0,122,0.15)",
+                }}
+              >
+                {/* City header row */}
+                <div className="flex items-center gap-2 mb-3">
+                  <span
+                    className="h-2.5 w-2.5 rounded-full shrink-0"
+                    style={{ background: "#ffd700", boxShadow: "0 0 8px #ffd700" }}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white font-bold text-sm leading-tight truncate">{activeCity.city}</p>
+                    <p className="text-slate-500 text-[9px]">
+                      {activeCity.country} · {activeCity.events.length} event{activeCity.events.length > 1 ? "s" : ""}
+                      {isPinned && <span className="ml-1 text-pink-500">· pinned</span>}
+                    </p>
+                  </div>
+
+                  {/* X button — only shown when pinned */}
+                  {isPinned && (
+                    <button
+                      onClick={() => setPinned(null)}
+                      className="shrink-0 flex h-6 w-6 items-center justify-center rounded-lg border border-[#363a59] text-slate-500 hover:text-white hover:border-pink-500 hover:bg-pink-500/10 transition"
+                      title="Close (Esc)"
+                    >
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                        <path d="M1 1l8 8M9 1L1 9"/>
+                      </svg>
+                    </button>
+                  )}
+                </div>
+
+                {/* Hint when not pinned */}
+                {!isPinned && (
+                  <p className="text-[8px] text-slate-600 mb-2 italic">Click city to pin &amp; open links</p>
+                )}
+
+                {/* Events list */}
+                <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
+                  {activeCity.events.map((ev) => (
+                    <div key={ev.id} className="rounded-xl bg-[#12152a] border border-[#1d2142] p-3">
+                      <div className="flex items-start justify-between gap-2 mb-1">
+                        <p className="text-[11px] font-semibold text-white leading-snug">{ev.name}</p>
+                        <span
+                          className="shrink-0 text-[8px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded-full"
+                          style={{ background: "#e6007a22", color: "#e6007a", border: "1px solid #e6007a44" }}
+                        >
+                          {ev.type}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1 mb-1.5">
+                        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2" strokeLinecap="round">
+                          <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                          <line x1="16" y1="2" x2="16" y2="6"/>
+                          <line x1="8" y1="2" x2="8" y2="6"/>
+                          <line x1="3" y1="10" x2="21" y2="10"/>
+                        </svg>
+                        <p className="text-[9px] text-amber-400 font-medium">{ev.date}{ev.endDate ? ` → ${ev.endDate}` : ""}</p>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">{ev.description}</p>
+                      {isPinned && (
+                        <a
+                          href={ev.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-2 inline-flex items-center gap-1 text-[9px] font-semibold text-pink-400 hover:text-pink-300 transition"
+                        >
+                          View on CoinMarketCap ↗
+                        </a>
+                      )}
+                    </div>
+                  ))}
                 </div>
               </div>
-
-              {/* Events list */}
-              <div className="space-y-2.5 max-h-64 overflow-y-auto pr-1">
-                {hovered.events.map((ev) => (
-                  <div key={ev.id} className="rounded-xl bg-[#12152a] border border-[#1d2142] p-3">
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                      <p className="text-[11px] font-semibold text-white leading-snug">{ev.name}</p>
-                      <span
-                        className="shrink-0 text-[8px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded-full"
-                        style={{ background: "#e6007a22", color: "#e6007a", border: "1px solid #e6007a44" }}
-                      >
-                        {ev.type}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1 mb-1.5">
-                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2" strokeLinecap="round">
-                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
-                        <line x1="16" y1="2" x2="16" y2="6"/>
-                        <line x1="8" y1="2" x2="8" y2="6"/>
-                        <line x1="3" y1="10" x2="21" y2="10"/>
-                      </svg>
-                      <p className="text-[9px] text-amber-400 font-medium">{ev.date}{ev.endDate ? ` → ${ev.endDate}` : ""}</p>
-                    </div>
-                    <p className="text-[10px] text-slate-400 leading-relaxed line-clamp-3">{ev.description}</p>
-                    <a
-                      href={ev.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="pointer-events-auto mt-2 inline-flex items-center gap-1 text-[9px] font-semibold text-pink-400 hover:text-pink-300 transition"
-                    >
-                      View on CoinMarketCap ↗
-                    </a>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Bottom hint */}
           <div
-            className="absolute bottom-4 left-1/2 text-[10px] text-slate-600 text-center"
+            className="absolute bottom-4 left-1/2 text-[10px] text-slate-600 text-center select-none"
             style={{ transform: "translateX(-50%)" }}
           >
-            Drag to rotate · Scroll to zoom · Hover golden cities to see events
+            Drag to rotate · Scroll to zoom · Hover to preview · Click to pin &amp; read
           </div>
         </div>
       )}
