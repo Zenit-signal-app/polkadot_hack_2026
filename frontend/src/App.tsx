@@ -5,6 +5,7 @@ import Trade from "./pages/Trade";
 import Rewards from "./pages/Rewards";
 import NewsSidebar from "./components/NewsSidebar";
 import SetupGuideWidget from "./components/SetupGuideWidget";
+import CryptoEventsGlobe from "./components/CryptoEventsGlobe";
 import zenitLogo from "../icon/Gemini_Generated_Image_jqqzfpjqqzfpjqqz.png";
 
 function Layout({ children }: { children: React.ReactNode }) {
@@ -144,6 +145,7 @@ function Layout({ children }: { children: React.ReactNode }) {
 
       <main className="max-w-7xl mx-auto px-6 py-8">{children}</main>
       <NewsSidebar />
+      <CryptoEventsGlobe />
       <SetupGuideWidget />
     </div>
   );
