@@ -10,10 +10,14 @@ const FAUCET_AMOUNT = ethers.parseUnits("1000", 18);
 const COOLDOWN_KEY = "zenit:faucet:cooldown";
 const COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
+// Plain mutable array — ethers.js v6 requires InterfaceAbi (not readonly)
 const ERC20_ABI = [
   "function transfer(address to, uint256 amount) returns (bool)",
   "function balanceOf(address account) view returns (uint256)",
-] as const;
+];
+
+// Prebuilt Interface for calldata encoding — avoids Contract Proxy cast issues
+const ERC20_IFACE = new ethers.Interface(ERC20_ABI);
 
 type Step = 1 | 2 | 3;
 
@@ -222,30 +226,58 @@ function Step3() {
 
     setFaucet({ status: "sending" });
     try {
+      // Build provider + wallet
       const provider = new ethers.JsonRpcProvider(RPC_URL, {
         chainId: CHAIN_ID,
         name: "polkadot-hub-testnet",
       });
-      const wallet = new ethers.Wallet(faucetKey.trim(), provider);
-      const token = new ethers.Contract(ZUSDC_ADDRESS, ERC20_ABI, wallet);
+      const senderWallet = new ethers.Wallet(faucetKey.trim(), provider);
 
-      // Check faucet balance
-      const balance: bigint = await (token.balanceOf as (a: string) => Promise<bigint>)(wallet.address);
-      if (balance < FAUCET_AMOUNT) {
-        setFaucet({ status: "error", message: "Faucet wallet has insufficient zUSDC balance. Please contact the admin." });
+      // ── Step A: check faucet wallet has enough zUSDC ──────────────────────
+      // Use low-level staticCall to avoid any Contract proxy issues
+      const balCalldata = ERC20_IFACE.encodeFunctionData("balanceOf", [senderWallet.address]);
+      const balResult = await provider.call({ to: ZUSDC_ADDRESS, data: balCalldata });
+      const [balance] = ERC20_IFACE.decodeFunctionResult("balanceOf", balResult);
+      if ((balance as bigint) < FAUCET_AMOUNT) {
+        setFaucet({
+          status: "error",
+          message: `Faucet wallet balance is ${ethers.formatUnits(balance as bigint, 18)} zUSDC — not enough to send 1000. Please contact the admin.`,
+        });
         return;
       }
 
-      const tx: ethers.TransactionResponse = await (token.transfer as (to: string, amt: bigint, opts: object) => Promise<ethers.TransactionResponse>)(
-        addr,
-        FAUCET_AMOUNT,
-        { gasLimit: 120_000n },
-      );
+      // ── Step B: encode transfer(addr, 1000 zUSDC) calldata explicitly ─────
+      const transferCalldata = ERC20_IFACE.encodeFunctionData("transfer", [addr, FAUCET_AMOUNT]);
 
-      // Wait for 1 confirmation
+      // ── Step C: estimate gas to catch reverts before broadcast ────────────
+      let gasLimit = 120_000n;
+      try {
+        const estimated = await provider.estimateGas({
+          from: senderWallet.address,
+          to: ZUSDC_ADDRESS,
+          data: transferCalldata,
+        });
+        gasLimit = (estimated * 130n) / 100n; // 30% buffer
+      } catch (estimateErr) {
+        const em = estimateErr instanceof Error ? estimateErr.message : String(estimateErr);
+        setFaucet({
+          status: "error",
+          message: `Gas estimation failed — transfer would likely revert: ${em.slice(0, 150)}`,
+        });
+        return;
+      }
+
+      // ── Step D: send raw transaction with explicit calldata ───────────────
+      const tx = await senderWallet.sendTransaction({
+        to: ZUSDC_ADDRESS,
+        data: transferCalldata,
+        gasLimit,
+      });
+
+      // ── Step E: wait for on-chain confirmation ────────────────────────────
       const receipt = await tx.wait(1);
       if (!receipt || receipt.status !== 1) {
-        setFaucet({ status: "error", message: "Transaction reverted on-chain. Please try again." });
+        setFaucet({ status: "error", message: `Transaction reverted on-chain. Hash: ${tx.hash}` });
         return;
       }
 
@@ -255,7 +287,7 @@ function Step3() {
       const msg = e instanceof Error ? e.message : String(e);
       setFaucet({
         status: "error",
-        message: msg.length > 200 ? msg.slice(0, 200) + "…" : msg,
+        message: msg.length > 250 ? msg.slice(0, 250) + "…" : msg,
       });
     }
   }, [walletInput, isValidAddr]);
