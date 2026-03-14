@@ -643,6 +643,20 @@ export default function Trade() {
   const [infoModal, setInfoModal] = useState<{ title: string; body: string } | null>(null);
   const [closeConfirmEntry, setCloseConfirmEntry] = useState<HistoryEntry | null>(null);
 
+  type PanelCloseConfirm = {
+    market: PolkadotSymbol;
+    amount: string;
+    side: "Long" | "Short";
+    margin: number;
+    leverage: number;
+    size: number;
+    entryPrice: number;
+    currentPrice: number;
+    pnl: number;
+    remaining: number;
+  };
+  const [panelCloseConfirm, setPanelCloseConfirm] = useState<PanelCloseConfirm | null>(null);
+
   type PendingClose = {
     id: string;
     txHash: string;
@@ -680,6 +694,34 @@ export default function Trade() {
     },
     [setPositionAmount],
   );
+
+  const maxCloseAmount = positionMargin;
+  const closeAmountNum = closeAmount.trim() ? Number(closeAmount) : 0;
+  const closeExceedsMax = closeAmount.trim().length > 0 && !Number.isNaN(closeAmountNum) && closeAmountNum > maxCloseAmount && maxCloseAmount > 0;
+
+  const closeWarning = useMemo(() => {
+    if (!closeExceedsMax || !pos) return null;
+    const currentPrice = displayPrice?.price ?? 0;
+    const ep = entryPrice ?? currentPrice;
+    const side = pos.position === 0 ? "Long" : "Short";
+    const lev = pos.leverage;
+    const size = positionMargin * lev;
+    let pnl = 0;
+    if (ep > 0 && currentPrice > 0) {
+      const delta = side === "Long" ? currentPrice - ep : ep - currentPrice;
+      pnl = (delta / ep) * size;
+    }
+    return {
+      side,
+      entryPrice: ep,
+      currentPrice,
+      margin: positionMargin,
+      leverage: lev,
+      size,
+      pnl,
+    };
+  }, [closeExceedsMax, pos, displayPrice?.price, entryPrice, positionMargin]);
+
   const orderSize = useMemo(() => {
     const trimmedClose = closeAmount.trim();
     if (trimmedClose) {
@@ -1073,6 +1115,88 @@ export default function Trade() {
           </div>
         </div>
       )}
+
+      {panelCloseConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-8">
+          <div className="w-full max-w-md rounded-2xl bg-[#0d0f18] border border-rose-500/60 p-6 text-white shadow-xl">
+            <h3 className="text-xl font-semibold text-rose-400">
+              {panelCloseConfirm.remaining > 0 ? "Partial Close Position" : "Close Position"}
+            </h3>
+            <p className="mt-2 text-sm text-slate-400">
+              {panelCloseConfirm.remaining > 0
+                ? `You are about to partially close your position. ${formatZUSDCNumber(panelCloseConfirm.remaining)} zUSDC will remain open.`
+                : "You are about to fully close your position with the following details:"}
+            </p>
+            <div className="mt-4 space-y-2 rounded-xl border border-[#363a59] bg-[#121421]/60 p-4 text-sm">
+              <div className="flex justify-between">
+                <span className="text-slate-400">Market</span>
+                <span>{panelCloseConfirm.market}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Position</span>
+                <span className={panelCloseConfirm.side === "Long" ? "text-emerald-400" : "text-rose-400"}>
+                  {panelCloseConfirm.side}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Closing Amount</span>
+                <span>{formatZUSDCNumber(panelCloseConfirm.margin)}</span>
+              </div>
+              {panelCloseConfirm.remaining > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Remaining After Close</span>
+                  <span className="text-amber-400">{formatZUSDCNumber(panelCloseConfirm.remaining)}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-slate-400">Leverage</span>
+                <span>{panelCloseConfirm.leverage}x</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Closing Size</span>
+                <span>{formatCurrency(panelCloseConfirm.size)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Entry Price</span>
+                <span>{formatForSymbol(panelCloseConfirm.entryPrice, panelCloseConfirm.market)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Current Price</span>
+                <span>{formatForSymbol(panelCloseConfirm.currentPrice, panelCloseConfirm.market)}</span>
+              </div>
+              <div className="my-1 border-t border-[#363a59]" />
+              <div className="flex justify-between font-semibold">
+                <span className="text-slate-400">Est. PnL</span>
+                <span className={panelCloseConfirm.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                  {formatCurrency(panelCloseConfirm.pnl)}
+                </span>
+              </div>
+            </div>
+            <div className="mt-6 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setPanelCloseConfirm(null)}
+                className="flex-1 rounded-xl border border-[#363a59] px-4 py-3 font-semibold text-slate-300 transition hover:bg-[#1e2033]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!panelCloseConfirm) return;
+                  handleClosePosition(panelCloseConfirm.market, panelCloseConfirm.amount);
+                  setPanelCloseConfirm(null);
+                }}
+                disabled={isClosingPosition}
+                className="flex-1 rounded-xl bg-rose-500 px-4 py-3 font-semibold text-white transition hover:bg-rose-600 disabled:opacity-50"
+              >
+                {isClosingPosition ? "Sending..." : "Confirm Close"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Market Stats Bar */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
 
@@ -1621,19 +1745,105 @@ export default function Trade() {
 
                   {hasPosition && (
                     <div className="mt-4 pt-4 border-t border-[#363a59]">
-                      <div className="mb-4">
-                        <label className="block text-slate-400 text-sm mb-2">Close Amount</label>
+                      <div className="mb-2">
+                        <div className="flex items-center justify-between mb-2">
+                          <label className="text-slate-400 text-sm">Close Amount</label>
+                          <button
+                            type="button"
+                            onClick={() => handleCloseAmountChange(String(maxCloseAmount))}
+                            className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition"
+                          >
+                            Max: <span className="font-semibold">{formatZUSDCNumber(maxCloseAmount)}</span>
+                          </button>
+                        </div>
                         <input
                           type="text"
                           value={closeAmount}
                           onChange={(e) => handleCloseAmountChange(e.target.value)}
                           placeholder="0.00"
-                          className="w-full px-4 py-3.5 rounded-xl bg-[#121421] border border-[#363a59] text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                          className={`w-full px-4 py-3.5 rounded-xl bg-[#121421] border text-white placeholder-slate-500 focus:outline-none transition ${
+                            closeExceedsMax
+                              ? "border-rose-500 focus:border-rose-400"
+                              : "border-[#363a59] focus:border-blue-500"
+                          }`}
                         />
                       </div>
+
+                      {closeExceedsMax && closeWarning && (
+                        <div className="mb-3 rounded-xl border border-rose-500/40 bg-rose-500/5 p-3 text-xs">
+                          <div className="flex items-center gap-1.5 text-rose-400 font-semibold mb-2">
+                            <svg className="h-4 w-4 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                              <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.168 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 6a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 6zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+                            </svg>
+                            Amount exceeds maximum position size
+                          </div>
+                          <p className="text-slate-400 mb-2">
+                            You cannot close more than your current open position. Enter a value ≤ {formatZUSDCNumber(maxCloseAmount)}.
+                          </p>
+                          <div className="space-y-1 text-[11px]">
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Position</span>
+                              <span className={closeWarning.side === "Long" ? "text-emerald-400" : "text-rose-400"}>{closeWarning.side}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Margin</span>
+                              <span className="text-white">{formatZUSDCNumber(closeWarning.margin)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Leverage</span>
+                              <span className="text-white">{closeWarning.leverage}x</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Size</span>
+                              <span className="text-white">{formatCurrency(closeWarning.size)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Entry Price</span>
+                              <span className="text-white">{formatForSymbol(closeWarning.entryPrice, chartSymbol)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Current Price</span>
+                              <span className="text-white">{formatForSymbol(closeWarning.currentPrice, chartSymbol)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Est. PnL at close</span>
+                              <span className={closeWarning.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                                {formatCurrency(closeWarning.pnl)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
                       <button
-                        onClick={() => handleClosePosition(chartSymbol)}
-                        disabled={!closeAmount || isClosingPosition || pendingCloses.some((p) => p.status === "pending")}
+                        onClick={() => {
+                          if (!pos || !closeAmount.trim()) return;
+                          const amt = Number(closeAmount);
+                          if (Number.isNaN(amt) || amt <= 0) return;
+                          const cp = displayPrice?.price ?? chartPrice?.price ?? 0;
+                          const ep = entryPrice ?? cp;
+                          const side = pos.position === 0 ? "Long" : "Short";
+                          const lev = pos.leverage;
+                          const size = amt * lev;
+                          let pnl = 0;
+                          if (ep > 0 && cp > 0) {
+                            const delta = side === "Long" ? cp - ep : ep - cp;
+                            pnl = (delta / ep) * size;
+                          }
+                          setPanelCloseConfirm({
+                            market: chartSymbol,
+                            amount: closeAmount,
+                            side: side as "Long" | "Short",
+                            margin: amt,
+                            leverage: lev,
+                            size,
+                            entryPrice: ep,
+                            currentPrice: cp,
+                            pnl,
+                            remaining: positionMargin - amt,
+                          });
+                        }}
+                        disabled={!closeAmount || closeExceedsMax || isClosingPosition || pendingCloses.some((p) => p.status === "pending")}
                         className="w-full py-3 rounded-xl font-semibold bg-gradient-to-r from-rose-500 via-rose-600 to-rose-700 text-white shadow-lg shadow-rose-900/40 transition hover:from-rose-400 hover:via-rose-500 hover:to-rose-600 hover:shadow-2xl disabled:opacity-50"
                       >
                         {isClosingPosition ? "Sending..." : pendingCloses.some((p) => p.status === "pending") ? "Confirming..." : "Close Position"}
