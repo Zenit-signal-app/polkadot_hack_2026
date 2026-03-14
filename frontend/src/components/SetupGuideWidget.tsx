@@ -446,15 +446,6 @@ function Step3() {
           <p className="text-slate-400">{faucet.message}</p>
         </div>
       )}
-
-      {/* Reset all cooldowns link */}
-      <button
-        type="button"
-        onClick={() => { clearAllCooldowns(); setFaucet({ status: "idle" }); }}
-        className="text-slate-600 hover:text-slate-400 text-[10px] underline transition"
-      >
-        Reset faucet cooldown history
-      </button>
     </div>
   );
 }
