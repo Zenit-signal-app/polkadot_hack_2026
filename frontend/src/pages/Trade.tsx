@@ -924,7 +924,7 @@ export default function Trade() {
           <div className="w-full max-w-md rounded-2xl bg-[#0d0f18] border border-rose-500/60 p-6 text-white shadow-xl">
             <h3 className="text-xl font-semibold text-rose-400">Close Position</h3>
             <p className="mt-2 text-sm text-slate-400">
-              Bạn sắp đóng vị thế với các thông tin sau:
+              You are about to close the position with the following details:
             </p>
             <div className="mt-4 space-y-2 rounded-xl border border-[#363a59] bg-[#121421]/60 p-4 text-sm">
               <div className="flex justify-between">
