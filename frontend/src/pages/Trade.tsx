@@ -293,8 +293,18 @@ export default function Trade() {
   const { isLoading: isWithdrawPending } = useWaitForTransactionReceipt({ hash: withdrawHash });
   const { isLoading: isOpenPending } = useWaitForTransactionReceipt({ hash: openHash });
   const { isLoading: isIncreasePending } = useWaitForTransactionReceipt({ hash: increaseHash });
-  const { isLoading: isClosePending } = useWaitForTransactionReceipt({ hash: closeHash });
+  useWaitForTransactionReceipt({ hash: closeHash });
   const [isSubmittingPosition, setIsSubmittingPosition] = useState(false);
+
+  const txLockRef = useRef<Record<string, boolean>>({});
+  const acquireTxLock = (key: string) => {
+    if (txLockRef.current[key]) return false;
+    txLockRef.current[key] = true;
+    return true;
+  };
+  const releaseTxLock = (key: string) => { txLockRef.current[key] = false; };
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
+  const [isClosingPosition, setIsClosingPosition] = useState(false);
 
   const publicClient = usePublicClient();
 
@@ -322,6 +332,7 @@ export default function Trade() {
 
   const handleDeposit = async () => {
     if (!depositAmount || !address || !publicClient) return;
+    if (!acquireTxLock("deposit")) return;
     setTxError(null);
     setIsDepositing(true);
     const amount = parseUnits(depositAmount, 18);
@@ -343,16 +354,20 @@ export default function Trade() {
           ...prev,
         ]);
       }
+      refetchDexBalance();
     } catch (e) {
       setTxError(e instanceof Error ? e.message : "Deposit failed");
     } finally {
       setIsDepositing(false);
+      releaseTxLock("deposit");
     }
   };
 
   const handleWithdraw = async () => {
     if (!withdrawAmount || !publicClient) return;
+    if (!acquireTxLock("withdraw")) return;
     setTxError(null);
+    setIsWithdrawing(true);
     const withdrawValue = Number(withdrawAmount);
     try {
       const hash = await withdrawAsync({ address: CONTRACTS.DEX, abi: PERPETUAL_DEX_ABI, functionName: "withdraw", args: [parseUnits(withdrawAmount, 18)] });
@@ -366,13 +381,18 @@ export default function Trade() {
           ...prev,
         ]);
       }
+      refetchDexBalance();
     } catch (e) {
       setTxError(e instanceof Error ? e.message : "Withdraw failed");
+    } finally {
+      setIsWithdrawing(false);
+      releaseTxLock("withdraw");
     }
   };
 
   const handleOpenPosition = async () => {
     if (!positionAmount) return;
+    if (!acquireTxLock("openPosition")) return;
     setTxError(null);
     const amountStr = positionAmount;
     const priceSnapshot = displayPrice?.price ?? chartPrice?.price ?? null;
@@ -428,11 +448,13 @@ export default function Trade() {
       setTxError(e instanceof Error ? e.message : "Open position failed");
     } finally {
       setIsSubmittingPosition(false);
+      releaseTxLock("openPosition");
     }
   };
 
   const handleIncreasePosition = async () => {
     if (!positionAmount) return;
+    if (!acquireTxLock("increasePosition")) return;
     setTxError(null);
     const amountStr = positionAmount;
     const priceSnapshot = displayPrice?.price ?? chartPrice?.price ?? null;
@@ -474,77 +496,120 @@ export default function Trade() {
       setPositionAmount(amountStr);
     } finally {
       setIsSubmittingPosition(false);
+      releaseTxLock("increasePosition");
     }
   };
 
   const handleClosePosition = async (market: PolkadotSymbol, amountOverride?: string) => {
     const amountValue = amountOverride ?? closeAmount;
-    if (!amountValue) return;
+    if (!amountValue || !publicClient) return;
+    if (!acquireTxLock("closePosition")) return;
     setTxError(null);
+    setIsClosingPosition(true);
     const closePrice = displayPrice?.price ?? chartPrice?.price ?? 0;
     const amountNumber = Number(amountValue);
     const entryPriceValue = entryPrice ?? closePrice;
     const closingLeverage = pos?.leverage ?? leverage;
     const volume = amountNumber * closingLeverage;
+    const closeId = crypto.randomUUID?.() ?? `${Date.now()}-close`;
+    const currentPosType = posTypeStr === "-" ? "N/A" : (posTypeStr as "Long" | "Short");
+
     try {
-      const txFee = await captureTxFee(
-        closePosAsync({
-          address: CONTRACTS.DEX,
-          abi: PERPETUAL_DEX_ABI,
-          functionName: "closePosition",
-          args: [symbolToBytes32(market), parseUnits(amountValue, 18)],
-          gas: 400000n,
-        }),
-      );
-      setCloseAmount("");
-      setTradeHistory((prev): HistoryEntry[] => {
-      let replaced = false;
-      const updatedHistory: HistoryEntry[] = prev.map((entry) => {
-        if (!replaced && entry.status === "open" && (entry.symbol === market || !entry.symbol)) {
-          replaced = true;
-          return {
-            ...entry,
-            action: "close",
-            amount: amountValue,
-            leverage: entry.leverage || closingLeverage,
-            entryPrice: entryPriceValue,
-            closePrice,
-            status: "closed",
-            timestamp: Date.now(),
-            fee: txFee,
-            takeProfit: previewTakeProfitPrice ?? null,
-            stopLoss: previewStopLossPrice ?? null,
-            volume,
-          };
-        }
-        return entry;
+      const txHash = await closePosAsync({
+        address: CONTRACTS.DEX,
+        abi: PERPETUAL_DEX_ABI,
+        functionName: "closePosition",
+        args: [symbolToBytes32(market), parseUnits(amountValue, 18)],
+        gas: 400000n,
       });
-      if (!replaced) {
-        const fallbackEntry: HistoryEntry = {
-          id: crypto.randomUUID?.() ?? `${Date.now()}-close`,
-          symbol: market,
-          action: "close",
-          type: (posTypeStr === "-" ? "N/A" : (posTypeStr as "Long" | "Short")),
-          amount: amountValue,
-          leverage: closingLeverage,
-          entryPrice: entryPriceValue,
-          closePrice,
-          status: "closed",
-          timestamp: Date.now(),
-          fee: txFee,
-          takeProfit: previewTakeProfitPrice ?? null,
-          stopLoss: previewStopLossPrice ?? null,
-          volume,
-        };
-        return [fallbackEntry, ...prev];
-      }
-      return updatedHistory;
-    });
-      refetchPositions();
-      refetchDexBalance();
+      if (!txHash) throw new Error("Transaction was not sent");
+
+      setCloseAmount("");
+      setCloseConfirmEntry(null);
+
+      setIsClosingPosition(false);
+      releaseTxLock("closePosition");
+
+      setPendingCloses((prev) => [
+        ...prev,
+        { id: closeId, txHash, symbol: market, amount: amountValue, type: currentPosType, status: "pending", timestamp: Date.now() },
+      ]);
+
+      publicClient
+        .waitForTransactionReceipt({ hash: txHash as `0x${string}`, ...waitOptions })
+        .then((receipt) => {
+          if (isTxReverted(receipt.status)) {
+            setPendingCloses((prev) =>
+              prev.map((p) => (p.id === closeId ? { ...p, status: "failed" as const } : p)),
+            );
+            setTxError("Close position transaction reverted on-chain");
+            return;
+          }
+          const gasUsed = receipt.gasUsed ?? 0n;
+          const gasPrice = receipt.effectiveGasPrice ?? 0n;
+          const txFee = gasUsed > 0n && gasPrice > 0n ? Number(formatUnits(gasUsed * gasPrice, 18)) : 0;
+
+          setPendingCloses((prev) =>
+            prev.map((p) => (p.id === closeId ? { ...p, status: "confirmed" as const } : p)),
+          );
+
+          setTradeHistory((prev): HistoryEntry[] => {
+            let replaced = false;
+            const updatedHistory: HistoryEntry[] = prev.map((entry) => {
+              if (!replaced && entry.status === "open" && (entry.symbol === market || !entry.symbol)) {
+                replaced = true;
+                return {
+                  ...entry,
+                  action: "close",
+                  amount: amountValue,
+                  leverage: entry.leverage || closingLeverage,
+                  entryPrice: entryPriceValue,
+                  closePrice,
+                  status: "closed",
+                  timestamp: Date.now(),
+                  fee: txFee,
+                  takeProfit: previewTakeProfitPrice ?? null,
+                  stopLoss: previewStopLossPrice ?? null,
+                  volume,
+                };
+              }
+              return entry;
+            });
+            if (!replaced) {
+              return [{
+                id: closeId,
+                symbol: market,
+                action: "close",
+                type: currentPosType,
+                amount: amountValue,
+                leverage: closingLeverage,
+                entryPrice: entryPriceValue,
+                closePrice,
+                status: "closed",
+                timestamp: Date.now(),
+                fee: txFee,
+                takeProfit: previewTakeProfitPrice ?? null,
+                stopLoss: previewStopLossPrice ?? null,
+                volume,
+              }, ...prev];
+            }
+            return updatedHistory;
+          });
+
+          refetchPositions();
+          refetchDexBalance();
+        })
+        .catch(() => {
+          setPendingCloses((prev) =>
+            prev.map((p) => (p.id === closeId ? { ...p, status: "failed" as const } : p)),
+          );
+          setTxError("Failed to confirm close position transaction");
+        });
     } catch (e) {
       if (!amountOverride) setCloseAmount(amountValue);
       setTxError(e instanceof Error ? e.message : "Close position failed");
+      setIsClosingPosition(false);
+      releaseTxLock("closePosition");
     } finally {
       setIsSubmittingPosition(false);
     }
@@ -577,6 +642,26 @@ export default function Trade() {
   const [previewStopLossPrice, setPreviewStopLossPrice] = useState<number | null>(null);
   const [infoModal, setInfoModal] = useState<{ title: string; body: string } | null>(null);
   const [closeConfirmEntry, setCloseConfirmEntry] = useState<HistoryEntry | null>(null);
+
+  type PendingClose = {
+    id: string;
+    txHash: string;
+    symbol: PolkadotSymbol;
+    amount: string;
+    type: "Long" | "Short" | "N/A";
+    status: "pending" | "confirmed" | "failed";
+    timestamp: number;
+  };
+  const [pendingCloses, setPendingCloses] = useState<PendingClose[]>([]);
+
+  useEffect(() => {
+    const settled = pendingCloses.filter((p) => p.status !== "pending");
+    if (settled.length === 0) return;
+    const timer = setTimeout(() => {
+      setPendingCloses((prev) => prev.filter((p) => p.status === "pending"));
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [pendingCloses]);
   const handlePositionAmountChange = useCallback(
     (value: string) => {
       if (value.trim()) {
@@ -883,7 +968,8 @@ export default function Trade() {
               <button
                 type="button"
                 onClick={() => setCloseConfirmEntry(entry)}
-                className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-500/20 text-rose-400 transition hover:bg-rose-500 hover:text-white"
+                disabled={isClosingPosition || pendingCloses.some((p) => p.status === "pending")}
+                className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-500/20 text-rose-400 transition hover:bg-rose-500 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Close position"
                 aria-label="Close position"
               >
@@ -974,15 +1060,14 @@ export default function Trade() {
               </button>
               <button
                 type="button"
-                onClick={async () => {
+                onClick={() => {
                   if (!closeConfirmEntry) return;
-                  await handleClosePosition(closeConfirmEntry.symbol ?? chartSymbol, closeConfirmEntry.amount);
-                  setCloseConfirmEntry(null);
+                  handleClosePosition(closeConfirmEntry.symbol ?? chartSymbol, closeConfirmEntry.amount);
                 }}
-                disabled={isClosePending}
+                disabled={isClosingPosition}
                 className="flex-1 rounded-xl bg-rose-500 px-4 py-3 font-semibold text-white transition hover:bg-rose-600 disabled:opacity-50"
               >
-                {isClosePending ? "Closing..." : "Confirm Close"}
+                {isClosingPosition ? "Sending..." : "Confirm Close"}
               </button>
             </div>
           </div>
@@ -1548,10 +1633,10 @@ export default function Trade() {
                       </div>
                       <button
                         onClick={() => handleClosePosition(chartSymbol)}
-                        disabled={!closeAmount || isClosePending}
+                        disabled={!closeAmount || isClosingPosition || pendingCloses.some((p) => p.status === "pending")}
                         className="w-full py-3 rounded-xl font-semibold bg-gradient-to-r from-rose-500 via-rose-600 to-rose-700 text-white shadow-lg shadow-rose-900/40 transition hover:from-rose-400 hover:via-rose-500 hover:to-rose-600 hover:shadow-2xl disabled:opacity-50"
                       >
-                        {isClosePending ? "Closing..." : "Close Position"}
+                        {isClosingPosition ? "Sending..." : pendingCloses.some((p) => p.status === "pending") ? "Confirming..." : "Close Position"}
                       </button>
                     </div>
                   )}
@@ -1586,10 +1671,10 @@ export default function Trade() {
                     />
                     <button
                       onClick={handleWithdraw}
-                      disabled={!withdrawAmount || isWithdrawPending}
+                      disabled={!withdrawAmount || isWithdrawPending || isWithdrawing}
                       className="w-full mt-3 py-3.5 rounded-xl font-semibold bg-[#363a59] hover:bg-[#4a4f6e] text-white transition disabled:opacity-50"
                     >
-                      {isWithdrawPending ? "Processing..." : "Withdraw"}
+                      {isWithdrawing ? "Processing..." : "Withdraw"}
                     </button>
                   </div>
                 </div>
@@ -1669,6 +1754,69 @@ export default function Trade() {
       </div>
 
     </div>
+
+    {/* ── Pending Close Notifications ── */}
+    {pendingCloses.length > 0 && (
+      <div className="fixed top-4 right-4 z-[60] flex flex-col gap-2 max-w-sm">
+        {pendingCloses.map((pc) => (
+          <div
+            key={pc.id}
+            className={`flex items-start gap-3 rounded-xl border p-4 shadow-2xl backdrop-blur-md transition-all duration-500 ${
+              pc.status === "pending"
+                ? "border-amber-500/40 bg-[#1a1500]/90"
+                : pc.status === "confirmed"
+                ? "border-emerald-500/40 bg-[#001a0a]/90"
+                : "border-rose-500/40 bg-[#1a0005]/90"
+            }`}
+          >
+            <div className="mt-0.5 shrink-0">
+              {pc.status === "pending" && (
+                <svg className="h-5 w-5 animate-spin text-amber-400" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              )}
+              {pc.status === "confirmed" && (
+                <svg className="h-5 w-5 text-emerald-400" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
+                </svg>
+              )}
+              {pc.status === "failed" && (
+                <svg className="h-5 w-5 text-rose-400" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clipRule="evenodd" />
+                </svg>
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-white">
+                {pc.status === "pending" && "Closing position..."}
+                {pc.status === "confirmed" && "Position closed"}
+                {pc.status === "failed" && "Close failed"}
+              </div>
+              <div className="mt-0.5 text-xs text-slate-400">
+                {pc.symbol} · {pc.type} · {formatZUSDCNumber(Number(pc.amount))}
+              </div>
+              <a
+                href={`https://blockscout-testnet.polkadot.io/tx/${pc.txHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-block text-[11px] text-blue-400 hover:text-blue-300 hover:underline"
+              >
+                View on Blockscout
+              </a>
+            </div>
+            <button
+              onClick={() => setPendingCloses((prev) => prev.filter((p) => p.id !== pc.id))}
+              className="shrink-0 text-slate-500 hover:text-white transition"
+            >
+              <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
+              </svg>
+            </button>
+          </div>
+        ))}
+      </div>
+    )}
 
     {/* ── AI Chatbot Widget — fixed bottom-right ── */}
     <AIChatbotWidget />
