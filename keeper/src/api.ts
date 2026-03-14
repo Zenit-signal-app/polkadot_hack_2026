@@ -8,6 +8,7 @@ import {
   updateOrderTpSl,
   updateTpSlByWalletAndMarket,
 } from "./db.js";
+import { checkCooldown, sendZUSDC } from "./faucet.js";
 import { log } from "./logger.js";
 
 const TAG = "api";
@@ -132,6 +133,61 @@ export async function startApi(): Promise<void> {
     return updated;
   });
 
+  // ─── GET /faucet/status?wallet=0x… ────────────────────────────────────────
+
+  app.get<{ Querystring: { wallet?: string } }>("/faucet/status", async (req, reply) => {
+    const { wallet } = req.query;
+    if (!wallet || !/^0x[0-9a-fA-F]{40}$/.test(wallet)) {
+      reply.status(400);
+      return { error: "Invalid wallet address" };
+    }
+    const { ok, remainingMs } = checkCooldown(wallet);
+    return {
+      canClaim: ok,
+      remainingMs: ok ? 0 : remainingMs,
+      remainingHours: ok ? 0 : Math.ceil(remainingMs / 3_600_000),
+    };
+  });
+
+  // ─── POST /faucet/zusdc — send 1000 zUSDC to user wallet ──────────────────
+
+  app.post<{ Body: { walletAddress: string } }>("/faucet/zusdc", async (req, reply) => {
+    const { walletAddress } = req.body ?? {};
+
+    if (!walletAddress || !/^0x[0-9a-fA-F]{40}$/.test(walletAddress)) {
+      reply.status(400);
+      return { error: "Invalid or missing walletAddress (must be 0x + 40 hex chars)" };
+    }
+
+    const cooldown = checkCooldown(walletAddress);
+    if (!cooldown.ok) {
+      const remainingHours = Math.ceil(cooldown.remainingMs / 3_600_000);
+      reply.status(429);
+      return {
+        error: `Rate limit: this wallet already claimed zUSDC within 24h. Try again in ~${remainingHours}h.`,
+        remainingMs: cooldown.remainingMs,
+        remainingHours,
+      };
+    }
+
+    try {
+      const result = await sendZUSDC(walletAddress);
+      log.info(TAG, `Faucet claimed`, { wallet: walletAddress.slice(0, 10) + "...", txHash: result.txHash });
+      return {
+        success: true,
+        txHash: result.txHash,
+        amount: result.amount,
+        token: config.tokenAddress,
+        explorerUrl: `https://blockscout-testnet.polkadot.io/tx/${result.txHash}`,
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Faucet error";
+      log.error(TAG, `Faucet failed`, { wallet: walletAddress, error: msg });
+      reply.status(500);
+      return { error: msg };
+    }
+  });
+
   // ─── Start server ──────────────────────────────────────────────────────────
 
   await app.listen({ port: config.apiPort, host: "0.0.0.0" });
@@ -144,6 +200,8 @@ export async function startApi(): Promise<void> {
       "GET  /orders/:id",
       "PUT  /orders/:id/tp-sl",
       "POST /orders/tp-sl",
+      "GET  /faucet/status?wallet=0x…",
+      "POST /faucet/zusdc",
     ],
   });
 }
