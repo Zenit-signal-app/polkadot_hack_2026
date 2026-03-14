@@ -149,6 +149,14 @@ const SAMPLE_YT: YTVideo[] = [
 ];
 
 // ─── RSS parser ───────────────────────────────────────────────────────────────
+function getItemLink(item: Element): string {
+  const linkEl = item.getElementsByTagName("link")[0];
+  if (linkEl?.textContent?.trim()) return linkEl.textContent.trim();
+  const guidEl = item.getElementsByTagName("guid")[0];
+  if (guidEl?.textContent?.trim()) return guidEl.textContent.trim();
+  return "";
+}
+
 function parseRSS(xml: string, source: string, color: string): NewsItem[] {
   try {
     const parser = new DOMParser();
@@ -162,7 +170,7 @@ function parseRSS(xml: string, source: string, color: string): NewsItem[] {
         id: `${source}-${i}`,
         title: getText("title"),
         description: raw.slice(0, 320) + (raw.length > 320 ? "…" : ""),
-        link: getText("link"),
+        link: getItemLink(item),
         pubDate: pub ? new Date(pub).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
         source,
         sourceColor: color,
@@ -209,6 +217,10 @@ function parseXRSS(xml: string, handle: string, color: string): XPost[] {
       const getText = (tag: string) => entry.querySelector(tag)?.textContent?.trim() ?? "";
       const raw = getText("description").replace(/<[^>]+>/g, "").trim();
       const pub = getText("pubDate");
+      const linkFromRSS = getItemLink(entry);
+      const tweetUrl = linkFromRSS
+        ? linkFromRSS.replace("nitter.net", "x.com")
+        : `https://x.com/${key}`;
       return {
         id: `${key}-${i}`,
         author: key.replace(/_/g, " "),
@@ -219,7 +231,7 @@ function parseXRSS(xml: string, handle: string, color: string): XPost[] {
         time: pub ? new Date(pub).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
         avatarColor: color,
         avatarUrl: `https://unavatar.io/twitter/${key}`,
-        tweetUrl: getText("link") || `https://x.com/${key}`,
+        tweetUrl,
       };
     });
   } catch {
@@ -305,12 +317,12 @@ export default function NewsSidebar() {
     setLoading(false);
   }, []);
 
+  // Fetch on mount + auto-refresh every 10 minutes (background)
   useEffect(() => {
-    if (!open) return;
     fetchAll();
-    const timer = setInterval(() => fetchAll(), 600000); // refresh every 10 minutes
+    const timer = setInterval(fetchAll, 600_000);
     return () => clearInterval(timer);
-  }, [open, fetchAll]);
+  }, [fetchAll]);
 
   // ── Close popup on Escape ──────────────────────────────────────────────────
   useEffect(() => {
@@ -390,16 +402,19 @@ function XAvatar({ item, size = 28 }: { item: XPost; size?: number }) {
           <span className="text-[9px] text-slate-600">{item.pubDate}</span>
         </div>
         <p className="text-[11px] text-slate-200 leading-snug line-clamp-2 font-medium">{item.title}</p>
-        <button
+        <a
+          href={item.link}
+          target="_blank"
+          rel="noopener noreferrer"
           className="mt-1.5 flex items-center gap-1 text-[9px] font-semibold uppercase tracking-widest transition hover:opacity-80"
           style={{ color: item.sourceColor }}
-          onClick={(e) => { e.stopPropagation(); setTooltip(null); setPopup({ type: "news", data: item }); }}
+          onClick={(e) => { e.stopPropagation(); setTooltip(null); }}
         >
           <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-            <path d="M1 1h4M1 1v4M11 11H7M11 11V7M1 11v-4M1 11h4M11 1H7M11 1v4"/>
+            <path d="M3 9L9 3M9 3H5M9 3v4"/>
           </svg>
           Full Article
-        </button>
+        </a>
       </div>
     );
   }
@@ -441,15 +456,18 @@ function XAvatar({ item, size = 28 }: { item: XPost; size?: number }) {
           <span>♥ {item.likes}</span>
           <span>↻ {item.retweets}</span>
         </div>
-        <button
+        <a
+          href={item.tweetUrl}
+          target="_blank"
+          rel="noopener noreferrer"
           className="mt-1.5 flex items-center gap-1 text-[9px] font-semibold uppercase tracking-widest text-slate-500 transition hover:text-white"
-          onClick={(e) => { e.stopPropagation(); setTooltip(null); setPopup({ type: "x", data: item }); }}
+          onClick={(e) => { e.stopPropagation(); setTooltip(null); }}
         >
           <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-            <path d="M1 1h4M1 1v4M11 11H7M11 11V7M1 11v-4M1 11h4M11 1H7M11 1v4"/>
+            <path d="M3 9L9 3M9 3H5M9 3v4"/>
           </svg>
           View Post
-        </button>
+        </a>
       </div>
     );
   }

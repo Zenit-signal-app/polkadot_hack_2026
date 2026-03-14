@@ -197,9 +197,6 @@ function markLocalCooldown(addr: string) {
   } catch { /* quota */ }
 }
 
-function clearAllCooldowns() {
-  try { localStorage.removeItem(COOLDOWN_KEY); } catch { /* ignore */ }
-}
 
 function Step3() {
   const [walletInput, setWalletInput] = useState("");
