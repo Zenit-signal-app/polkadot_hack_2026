@@ -17,20 +17,11 @@ class RsiTokenPoint {
   });
 }
 
-/// RSI Heatmap Chart Widget
-///
-/// Y-axis: RSI value (0–100) — fixed on the left.
-/// X-axis: token symbols sorted alphabetically, filling the available width.
-/// Range slider below the chart controls which window of tokens is visible.
 class RsiHeatmapChart extends StatefulWidget {
   final List<RsiTokenPoint> tokens;
   final double height;
 
-  const RsiHeatmapChart({
-    super.key,
-    required this.tokens,
-    this.height = 400,
-  });
+  const RsiHeatmapChart({super.key, required this.tokens, this.height = 400});
 
   @override
   State<RsiHeatmapChart> createState() => _RsiHeatmapChartState();
@@ -122,7 +113,8 @@ class _RsiHeatmapChartState extends State<RsiHeatmapChart> {
                                   ...visible.asMap().entries.map((e) {
                                     final itemW = chartWidth / visible.length;
                                     final cx = (e.key + 0.5) * itemW;
-                                    final cy = _topPadding +
+                                    final cy =
+                                        _topPadding +
                                         (100 - e.value.rsiValue) /
                                             100 *
                                             chartAreaHeight;
@@ -164,8 +156,12 @@ class _RsiHeatmapChartState extends State<RsiHeatmapChart> {
               endLabel: visible.isNotEmpty ? visible.last.symbol : '',
               startImage: visible.isNotEmpty ? visible.first.image : '',
               endImage: visible.isNotEmpty ? visible.last.image : '',
-              startColor: visible.isNotEmpty ? visible.first.color : const Color(0xFF5BA3FF),
-              endColor: visible.isNotEmpty ? visible.last.color : const Color(0xFF5BA3FF),
+              startColor: visible.isNotEmpty
+                  ? visible.first.color
+                  : const Color(0xFF5BA3FF),
+              endColor: visible.isNotEmpty
+                  ? visible.last.color
+                  : const Color(0xFF5BA3FF),
             ),
           ),
         ],
@@ -274,9 +270,9 @@ class _TechRangeSliderState extends State<_TechRangeSlider> {
   static const double _labelH = 16.0;
 
   int _dragging = -1;
-  double _panAnchorNorm = 0.0; 
-  double _panStartVal = 0.0;   
-  double _panEndVal = 0.0;  
+  double _panAnchorNorm = 0.0;
+  double _panStartVal = 0.0;
+  double _panEndVal = 0.0;
 
   double _thumbX(double trackW, double v) => v * trackW;
 
@@ -417,7 +413,10 @@ class _TechSliderPainter extends CustomPainter {
       inactiveRRect,
       Paint()
         ..shader = LinearGradient(
-          colors: [Colors.white.withOpacity(0.06), Colors.white.withOpacity(0.12)],
+          colors: [
+            Colors.white.withOpacity(0.06),
+            Colors.white.withOpacity(0.12),
+          ],
         ).createShader(Rect.fromLTWH(0, 0, size.width, trackH)),
     );
 
@@ -489,7 +488,6 @@ class _TechSliderPainter extends CustomPainter {
       old.startLabel != startLabel ||
       old.endLabel != endLabel;
 }
-
 
 class _ThumbCoin extends StatelessWidget {
   final String imageUrl;

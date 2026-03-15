@@ -1,12 +1,9 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
-import 'package:app_tracking_transparency/app_tracking_transparency.dart';
-import 'dart:io' show Platform;
 
 import 'core/store/user_store.dart';
 import 'core/store/token_store.dart';
@@ -23,29 +20,21 @@ import 'routes/app_routes.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await dotenv.load(fileName: '.env');
-  
-  // Skip Firebase initialization on web until firebase_options.dart is generated
-  if (!kIsWeb) {
+
+  try {
+    await dotenv.load(fileName: '.env');
+  } catch (_) {}
+
+  try {
     await Firebase.initializeApp();
-
-    // Register background message handler
     FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
-    
-    // Initialize notification service
     await NotificationService().initialize();
+  } catch (_) {}
 
-    if (Platform.isIOS) {
-      final status =
-          await AppTrackingTransparency.trackingAuthorizationStatus;
-      if (status == TrackingStatus.notDetermined) {
-        await AppTrackingTransparency.requestTrackingAuthorization();
-      }
-    }
-
+  try {
     await MobileAds.instance.initialize();
-  }
-  
+  } catch (_) {}
+
   runApp(const MyApp());
 }
 
@@ -123,7 +112,8 @@ class _AdManagerProvider extends InheritedWidget {
   });
 
   static AdManagerStore of(BuildContext context) {
-    final provider = context.dependOnInheritedWidgetOfExactType<_AdManagerProvider>();
+    final provider = context
+        .dependOnInheritedWidgetOfExactType<_AdManagerProvider>();
     assert(provider != null, 'No _AdManagerProvider found in context');
     return provider!.adManagerStore;
   }
@@ -141,7 +131,7 @@ AdManagerStore getAdManagerStore(BuildContext context) {
 
 class _AppRoot extends StatefulWidget {
   final AdManagerStore adManagerStore;
-  
+
   const _AppRoot({required this.adManagerStore});
 
   @override
@@ -160,12 +150,12 @@ class _AppRootState extends State<_AppRoot> {
   Future<void> _initializeAds() async {
     final admobStore = context.read<AdmobStore>();
     await admobStore.load();
-    
+
     // Initialize ad managers after config is loaded
     await widget.adManagerStore.initialize();
-    
+
     // Set up app lifecycle observer for app open ads
-    if (!kIsWeb && AdmobStore.isEnabled) {
+    if (AdmobStore.isEnabled) {
       _appLifecycleReactor = AppLifecycleReactor(
         widget.adManagerStore.appOpenAdManager,
       );

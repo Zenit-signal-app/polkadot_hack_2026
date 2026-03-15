@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:app_tracking_transparency/app_tracking_transparency.dart';
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/network/api_client.dart';
@@ -24,8 +27,17 @@ class _SplashScreenState extends State<SplashScreen> {
 
   Future<void> _initializeApp() async {
     try {
-      // Simulate API calls that would happen on the home screen
-      // Replace this with your actual API calls
+      // Request ATT after the app UI is visible (Apple requirement)
+      if (!kIsWeb && Platform.isIOS) {
+        try {
+          final status =
+              await AppTrackingTransparency.trackingAuthorizationStatus;
+          if (status == TrackingStatus.notDetermined) {
+            await AppTrackingTransparency.requestTrackingAuthorization();
+          }
+        } catch (_) {}
+      }
+
       await Future.wait([
         _loadUserData(),
         _loadAppConfig(),
