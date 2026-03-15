@@ -41,40 +41,40 @@ const TOP_N      = 80;
 const MIN_RADIUS = 24;
 const MAX_RADIUS = 100;
 
-// ─── Cyberpunk color palette ──────────────────────────────────────────────────
-// Buyers  : near-black teal  →  vivid cyan    #00e5ff
-// Sellers : near-black red   →  vivid magenta #ff0066
-// Neutral : dark charcoal    #252535
-const CYAN_DIM     = "#082020";
-const CYAN_BRIGHT  = "#00e5ff";
-const RED_DIM      = "#25060e";
-const RED_BRIGHT   = "#ff0066";
-const NEUTRAL_COL  = "#252535";
+// ─── Stockmap-style trading color palette ─────────────────────────────────────
+// Buyers  : deep forest green → vivid bright green  #4caf50
+// Sellers : deep blood red    → vivid bright red     #f44336
+// Neutral : dark slate                               #1e2128
+const GREEN_DIM    = "#0b1f0b";
+const GREEN_BRIGHT = "#4caf50";
+const RED_DIM      = "#1f0b0b";
+const RED_BRIGHT   = "#f44336";
+const NEUTRAL_COL  = "#1e2128";
 
 function bubbleColor(delta: number, maxAbs: number): string {
   if (maxAbs === 0 || Math.abs(delta) < maxAbs * 0.03) return NEUTRAL_COL;
-  const t = Math.pow(Math.min(Math.abs(delta) / maxAbs, 1), 0.55); // gamma for better mid-range pop
+  const t = Math.pow(Math.min(Math.abs(delta) / maxAbs, 1), 0.6);
   return delta > 0
-    ? d3.interpolateRgb(CYAN_DIM, CYAN_BRIGHT)(t)
-    : d3.interpolateRgb(RED_DIM,  RED_BRIGHT)(t);
+    ? d3.interpolateRgb(GREEN_DIM, GREEN_BRIGHT)(t)
+    : d3.interpolateRgb(RED_DIM,   RED_BRIGHT)(t);
 }
 
 function bubbleBorderColor(delta: number, maxAbs: number): string {
-  if (maxAbs === 0 || Math.abs(delta) < maxAbs * 0.03) return "rgba(60,65,110,0.45)";
+  if (maxAbs === 0 || Math.abs(delta) < maxAbs * 0.03) return "rgba(50,55,70,0.5)";
   const t  = Math.min(Math.abs(delta) / maxAbs, 1);
-  const al = (0.25 + t * 0.65).toFixed(2);
-  return delta > 0 ? `rgba(0,229,255,${al})` : `rgba(255,0,102,${al})`;
+  const al = (0.45 + t * 0.45).toFixed(2);   // always fairly visible ring
+  return delta > 0 ? `rgba(102,187,106,${al})` : `rgba(239,83,80,${al})`;
 }
 
-// CSS drop-shadow glow — intensity and blur radius scale with |delta|
+// CSS drop-shadow glow — soft green/red trading style
 function bubbleGlowFilter(delta: number, maxAbs: number): string {
-  if (maxAbs === 0 || Math.abs(delta) < maxAbs * 0.03) return "none";
+  if (maxAbs === 0 || Math.abs(delta) < maxAbs * 0.04) return "none";
   const t    = Math.min(Math.abs(delta) / maxAbs, 1);
-  const blur = Math.round(4 + t * 14);   // 4 → 18 px
-  const al   = (0.25 + t * 0.6).toFixed(2);
+  const blur = Math.round(3 + t * 10);   // 3 → 13 px  (softer than neon)
+  const al   = (0.18 + t * 0.45).toFixed(2);
   return delta > 0
-    ? `drop-shadow(0 0 ${blur}px rgba(0,229,255,${al}))`
-    : `drop-shadow(0 0 ${blur}px rgba(255,0,102,${al}))`;
+    ? `drop-shadow(0 0 ${blur}px rgba(76,175,80,${al}))`
+    : `drop-shadow(0 0 ${blur}px rgba(244,67,54,${al}))`;
 }
 
 // ─── Radius scale (sqrt so area ∝ volume) ────────────────────────────────────
@@ -232,153 +232,154 @@ export default function BinanceBubbleChart() {
     return () => window.removeEventListener("keydown", h);
   }, []);
 
-  // ── D3 draw/init (Cyberpunk visual upgrade) ──────────────────────────────────
+  // ── D3 draw/init (Stockmap-style: dense pack, 3-line text, green/red) ────────
   const initD3 = useCallback((nodes: BubbleNode[]) => {
     const svg = d3.select(svgRef.current!);
     svg.selectAll("*").remove();
 
-    // Pre-compute per-render maxAbs for glow intensity
     const maxAbsDelta = d3.max(nodes.map(n => Math.abs(n.delta))) ?? 1;
+    const FONT = "'Inter','SF Pro Text',-apple-system,BlinkMacSystemFont,sans-serif";
 
     const defs = svg.append("defs");
 
-    // ── Per-bubble 3D sphere gradients ───────────────────────────────────────
-    // Each bubble has:
-    //   fill-{id}  : main body gradient (dim edge → base color → bright highlight)
-    //   shine-{id} : specular white highlight (top-left lens flare effect)
+    // ── Per-bubble fill gradients (sphere depth) ──────────────────────────────
     nodes.forEach(n => {
-      // 1) Base fill: radial from slightly-brighter-center to base to darker-edge
-      const baseCol = d3.color(n.color) ?? d3.rgb(38, 38, 56);
-      const lighter = (baseCol as d3.RGBColor).brighter(0.7).formatRgb();
-      const darker  = (baseCol as d3.RGBColor).darker(1.8).formatRgb();
+      const base    = d3.color(n.color) ?? d3.rgb(30, 33, 40);
+      const lighter = (base as d3.RGBColor).brighter(0.55).formatRgb();
+      const darker  = (base as d3.RGBColor).darker(1.4).formatRgb();
 
-      const fillGrad = defs.append("radialGradient")
-        .attr("id",  `fill-${n.id}`)
-        .attr("cx",  "40%").attr("cy", "38%").attr("r", "65%");
-      fillGrad.append("stop").attr("offset", "0%").attr("stop-color", lighter);
-      fillGrad.append("stop").attr("offset", "55%").attr("stop-color", n.color);
-      fillGrad.append("stop").attr("offset", "100%").attr("stop-color", darker);
-
-      // 2) Specular shine: small white highlight in top-left quadrant
-      const shineGrad = defs.append("radialGradient")
-        .attr("id",  `shine-${n.id}`)
-        .attr("cx",  "32%").attr("cy", "28%").attr("r", "48%");
-      shineGrad.append("stop").attr("offset", "0%")
-        .attr("stop-color", "rgba(255,255,255,0.40)");
-      shineGrad.append("stop").attr("offset", "55%")
-        .attr("stop-color", "rgba(255,255,255,0.06)");
-      shineGrad.append("stop").attr("offset", "100%")
-        .attr("stop-color", "rgba(255,255,255,0)");
+      const fg = defs.append("radialGradient")
+        .attr("id", `fill-${n.id}`)
+        .attr("cx", "42%").attr("cy", "38%").attr("r", "68%");
+      fg.append("stop").attr("offset",  "0%").attr("stop-color", lighter);
+      fg.append("stop").attr("offset", "50%").attr("stop-color", n.color);
+      fg.append("stop").attr("offset","100%").attr("stop-color", darker);
     });
 
-    // ── One <g> group per bubble ─────────────────────────────────────────────
+    // Shared specular highlight (white lens-flare applied on top of every bubble)
+    const sg = defs.append("radialGradient").attr("id", "shine-shared")
+      .attr("cx", "33%").attr("cy", "28%").attr("r", "50%");
+    sg.append("stop").attr("offset",  "0%").attr("stop-color", "rgba(255,255,255,0.35)");
+    sg.append("stop").attr("offset", "55%").attr("stop-color", "rgba(255,255,255,0.04)");
+    sg.append("stop").attr("offset","100%").attr("stop-color", "rgba(255,255,255,0)");
+
+    // Shared vignette (edge darkening)
+    const vg = defs.append("radialGradient").attr("id", "vignette-shared")
+      .attr("cx", "50%").attr("cy", "50%").attr("r", "50%");
+    vg.append("stop").attr("offset", "50%").attr("stop-color", "rgba(0,0,0,0)");
+    vg.append("stop").attr("offset","100%").attr("stop-color", "rgba(0,0,0,0.50)");
+
+    // ── One <g> per bubble ───────────────────────────────────────────────────
     const g = svg.selectAll<SVGGElement, BubbleNode>("g.bubble")
       .data(nodes, d => d.id)
       .join("g")
       .attr("class", "bubble")
       .style("cursor", "pointer")
-      // Neon glow via CSS drop-shadow (intensity ∝ |delta|)
       .style("filter", d => bubbleGlowFilter(d.delta, maxAbsDelta));
 
-    // ── Outer halo ring (wider, softer) ──────────────────────────────────────
-    g.append("circle")
-      .attr("class", "halo")
-      .attr("r",  d => d.radius + 5)
+    // Visible ring (Stockmap-style prominent border)
+    g.append("circle").attr("class", "ring")
+      .attr("r",  d => d.radius + 2.5)
       .attr("fill", "none")
       .attr("stroke", d => d.borderColor)
-      .attr("stroke-width", 1.2)
-      .attr("opacity", 0.45);
+      .attr("stroke-width", 2)
+      .attr("opacity", 0.75);
 
-    // ── Main body — 3D sphere gradient fill, opacity 0.88 ────────────────────
-    g.append("circle")
-      .attr("class", "body")
-      .attr("r",       d => d.radius)
-      .attr("fill",    d => `url(#fill-${d.id})`)
-      .attr("stroke",  d => d.borderColor)
-      .attr("stroke-width", 1.5)
-      .attr("opacity", 0.88);
+    // Main body
+    g.append("circle").attr("class", "body")
+      .attr("r",            d => d.radius)
+      .attr("fill",         d => `url(#fill-${d.id})`)
+      .attr("stroke",       d => d.borderColor)
+      .attr("stroke-width", 1)
+      .attr("opacity",      0.93);
 
-    // ── Specular shine overlay (pointer-events none so it doesn't steal hover) 
-    g.append("circle")
-      .attr("class", "shine")
-      .attr("r",    d => d.radius)
-      .attr("fill", d => `url(#shine-${d.id})`)
+    // Specular shine + vignette overlays
+    g.append("circle").attr("class", "shine")
+      .attr("r", d => d.radius).attr("fill", "url(#shine-shared)")
+      .attr("pointer-events", "none");
+    g.append("circle").attr("class", "vignette")
+      .attr("r", d => d.radius).attr("fill", "url(#vignette-shared)")
       .attr("pointer-events", "none");
 
-    // ── Edge darkening vignette ───────────────────────────────────────────────
-    g.append("circle")
-      .attr("class", "vignette")
-      .attr("r",    d => d.radius)
-      .attr("fill", "url(#vignette-shared)")
-      .attr("pointer-events", "none");
+    // ── Helper: compute font sizes + vertical positions for 3-line layout ────
+    // layout: [% change] ← top  |  [TICKER] ← center  |  [v/vol] ← bottom
+    // When radius < 30: only ticker, centered
+    // When radius 30-42: ticker + % change
+    // When radius > 42: all 3 lines
+    const tickerFS  = (r: number) => Math.max(9,  Math.min(r * 0.40, 26));
+    const subFS     = (r: number) => Math.max(7,  Math.min(r * 0.26, 14));
+    const lineGap   = (r: number) => tickerFS(r) * 1.15 + subFS(r) * 0.5;
 
-    // Shared vignette gradient (dark at edge, transparent at center)
-    if (svg.select("#vignette-shared").empty()) {
-      const vig = defs.append("radialGradient").attr("id", "vignette-shared")
-        .attr("cx", "50%").attr("cy", "50%").attr("r", "50%");
-      vig.append("stop").attr("offset", "55%").attr("stop-color", "rgba(0,0,0,0)");
-      vig.append("stop").attr("offset", "100%").attr("stop-color", "rgba(0,0,0,0.55)");
-    }
-
-    // ── Ticker text ──────────────────────────────────────────────────────────
-    // Visible when radius ≥ 22; font scales proportionally
-    g.append("text")
-      .attr("class", "label-ticker")
+    // ── % change — top line ───────────────────────────────────────────────────
+    g.append("text").attr("class", "label-top")
       .attr("text-anchor", "middle")
       .attr("dominant-baseline", "middle")
-      // If radius big enough to show two lines, nudge up
-      .attr("dy", d => d.radius >= 34 ? "-0.65em" : "0.05em")
-      .attr("fill", "rgba(255,255,255,0.95)")
-      .attr("font-weight", "700")
-      .attr("font-family", "'Inter','SF Pro Text',-apple-system,BlinkMacSystemFont,sans-serif")
-      .style("font-size",       d => `${Math.max(9, Math.min(d.radius * 0.38, 24))}px`)
-      .style("letter-spacing", "0.04em")
-      .style("text-transform", "uppercase")
+      .attr("fill", d => d.priceChange >= 0 ? "#81c784" : "#e57373")
+      .attr("font-family", FONT)
+      .attr("font-weight", "600")
+      .style("font-size",      d => `${subFS(d.radius)}px`)
       .style("pointer-events", "none")
-      // Hide text on tiny bubbles (< 22 px) — avoids cluttered labels
-      .style("display", d => d.radius < 22 ? "none" : "")
+      .attr("y", d => d.radius >= 30 ? -lineGap(d.radius) : 9999)
+      .style("display",        d => d.radius < 30 ? "none" : "")
+      .text(d => `${d.priceChange >= 0 ? "▲" : "▼"} ${Math.abs(d.priceChange).toFixed(2)}%`);
+
+    // ── Ticker — center ───────────────────────────────────────────────────────
+    g.append("text").attr("class", "label-ticker")
+      .attr("text-anchor", "middle")
+      .attr("dominant-baseline", "middle")
+      .attr("fill", "rgba(255,255,255,0.97)")
+      .attr("font-family", FONT)
+      .attr("font-weight", "800")
+      .style("font-size",       d => `${tickerFS(d.radius)}px`)
+      .style("letter-spacing",  "0.03em")
+      .style("text-transform",  "uppercase")
+      .style("pointer-events",  "none")
+      .style("display",         d => d.radius < 20 ? "none" : "")
+      // Shift ticker up when showing 3 lines so all 3 fit
+      .attr("y", d => d.radius >= 42 ? -subFS(d.radius) * 0.35 : 0)
       .text(d => d.id);
 
-    // ── % change text (below ticker, only if radius ≥ 34) ────────────────────
-    g.append("text")
-      .attr("class", "label-change")
+    // ── Volume — bottom line ──────────────────────────────────────────────────
+    g.append("text").attr("class", "label-vol")
       .attr("text-anchor", "middle")
       .attr("dominant-baseline", "middle")
-      .attr("dy", d => d.radius >= 34 ? "0.75em" : "9999px") // hide via off-screen
-      .attr("fill", d => d.priceChange >= 0 ? "#4dfff3" : "#ff6699")
-      .attr("font-family", "'Inter','SF Pro Text',-apple-system,BlinkMacSystemFont,sans-serif")
-      .style("font-size",       d => `${Math.max(7, Math.min(d.radius * 0.25, 14))}px`)
-      .style("font-weight",     "500")
-      .style("pointer-events",  "none")
-      .style("display",         d => d.radius < 34 ? "none" : "")
-      .text(d => `${d.priceChange >= 0 ? "+" : ""}${d.priceChange.toFixed(2)}%`);
+      .attr("fill", "rgba(210,220,230,0.65)")
+      .attr("font-family", FONT)
+      .attr("font-weight", "400")
+      .style("font-size",      d => `${subFS(d.radius)}px`)
+      .style("pointer-events", "none")
+      .attr("y", d => d.radius >= 42 ? lineGap(d.radius) - subFS(d.radius) * 0.5 : 9999)
+      .style("display",        d => d.radius < 42 ? "none" : "")
+      .text(d => `v/${fmtVol(d.volume)}`);
 
-    // ── Hover / click interactions ────────────────────────────────────────────
+    // ── Hover / click ─────────────────────────────────────────────────────────
+    const hoverGlow = (d: BubbleNode) =>
+      d.delta >= 0
+        ? "drop-shadow(0 0 18px rgba(76,175,80,0.85))"
+        : "drop-shadow(0 0 18px rgba(244,67,54,0.85))";
+
     g.on("mouseenter", function (event, d) {
-        d3.select(this)
-          .transition().duration(130)
-          .style("filter", `drop-shadow(0 0 22px ${d.delta >= 0 ? "rgba(0,229,255,0.9)" : "rgba(255,0,102,0.9)"})`);
+        d3.select(this).transition().duration(120).style("filter", hoverGlow(d));
         d3.select(this).select(".body")
-          .transition().duration(130).attr("r", d.radius * 1.1);
-        d3.select(this).select(".halo")
-          .transition().duration(130).attr("r", d.radius * 1.1 + 5).attr("opacity", 0.85);
+          .transition().duration(120).attr("r", d.radius * 1.08);
+        d3.select(this).select(".ring")
+          .transition().duration(120).attr("r", d.radius * 1.08 + 2.5).attr("opacity", 1);
         d3.select(this).select(".shine")
-          .transition().duration(130).attr("r", d.radius * 1.1);
+          .transition().duration(120).attr("r", d.radius * 1.08);
         d3.select(this).select(".vignette")
-          .transition().duration(130).attr("r", d.radius * 1.1);
+          .transition().duration(120).attr("r", d.radius * 1.08);
         setTooltip({ visible: true, x: event.clientX, y: event.clientY, node: d });
       })
-      .on("mousemove", function (event) {
+      .on("mousemove", (event) => {
         setTooltip(prev => ({ ...prev, x: event.clientX, y: event.clientY }));
       })
       .on("mouseleave", function (_event, d) {
-        d3.select(this)
-          .transition().duration(200)
+        d3.select(this).transition().duration(200)
           .style("filter", bubbleGlowFilter(d.delta, maxAbsDelta));
         d3.select(this).select(".body")
           .transition().duration(200).attr("r", d.radius);
-        d3.select(this).select(".halo")
-          .transition().duration(200).attr("r", d.radius + 5).attr("opacity", 0.45);
+        d3.select(this).select(".ring")
+          .transition().duration(200).attr("r", d.radius + 2.5).attr("opacity", 0.75);
         d3.select(this).select(".shine")
           .transition().duration(200).attr("r", d.radius);
         d3.select(this).select(".vignette")
@@ -389,15 +390,14 @@ export default function BinanceBubbleChart() {
         window.open(`https://www.binance.com/en/trade/${d.id}_USDT`, "_blank");
       });
 
-    // ── Force simulation — tuned for "bouncy" organic feel ───────────────────
-    // Lower velocityDecay → more elastic bounce
-    // Larger collide padding → clear breathing room between bubbles
+    // ── Force simulation — tight Stockmap-style packing ───────────────────────
+    // Higher center strength + minimal collide padding → dense cluster
     const sim = d3.forceSimulation<BubbleNode>(nodes)
-      .force("center",  d3.forceCenter(dims.w / 2, dims.h / 2 - 28).strength(0.04))
-      .force("charge",  d3.forceManyBody<BubbleNode>().strength(-12))
-      .force("collide", d3.forceCollide<BubbleNode>(d => d.radius + 5).strength(0.9).iterations(5))
-      .alphaDecay(0.016)
-      .velocityDecay(0.26)          // lower → bouncier movement
+      .force("center",  d3.forceCenter(dims.w / 2, dims.h / 2 - 25).strength(0.08))
+      .force("charge",  d3.forceManyBody<BubbleNode>().strength(-6))
+      .force("collide", d3.forceCollide<BubbleNode>(d => d.radius + 1.5).strength(0.95).iterations(6))
+      .alphaDecay(0.015)
+      .velocityDecay(0.38)
       .on("tick", () => {
         g.attr("transform", d => `translate(${d.x ?? 0},${d.y ?? 0})`);
       });
@@ -450,55 +450,70 @@ export default function BinanceBubbleChart() {
         clearTimeout(batchTimer.current);
         batchTimer.current = setTimeout(() => {
           if (!svgRef.current) return;
-          const svg      = d3.select(svgRef.current);
+          const svg       = d3.select(svgRef.current);
           const newMaxAbs = d3.max(nodesRef.current.map(n => Math.abs(n.delta))) ?? 1;
+          const subFS     = (r: number) => Math.max(7, Math.min(r * 0.26, 14));
+          const tickerFS  = (r: number) => Math.max(9, Math.min(r * 0.40, 26));
+          const lineGap   = (r: number) => tickerFS(r) * 1.15 + subFS(r) * 0.5;
 
           nodesRef.current.forEach(node => {
-            const grp = svg.selectAll<SVGGElement, BubbleNode>("g.bubble")
+            const grp      = svg.selectAll<SVGGElement, BubbleNode>("g.bubble")
               .filter(d => d.id === node.id);
-
             const isSpiked = spiked.includes(node.id);
 
-            // Update gradient stops for the new base color
+            // Update fill gradient stops
             const baseCol = d3.color(node.color);
             if (baseCol) {
-              const lighter = (baseCol as d3.RGBColor).brighter(0.7).formatRgb();
-              const darker  = (baseCol as d3.RGBColor).darker(1.8).formatRgb();
+              const lighter = (baseCol as d3.RGBColor).brighter(0.55).formatRgb();
+              const darker  = (baseCol as d3.RGBColor).darker(1.4).formatRgb();
               svg.select(`#fill-${node.id} stop:nth-child(1)`).attr("stop-color", lighter);
               svg.select(`#fill-${node.id} stop:nth-child(2)`).attr("stop-color", node.color);
               svg.select(`#fill-${node.id} stop:nth-child(3)`).attr("stop-color", darker);
             }
 
+            // Update stroke colors
             grp.select(".body").attr("stroke", node.borderColor);
-            grp.select(".halo").attr("stroke", node.borderColor);
-            grp.select(".label-change")
-              .attr("fill", node.priceChange >= 0 ? "#4dfff3" : "#ff6699")
-              .text(`${node.priceChange >= 0 ? "+" : ""}${node.priceChange.toFixed(2)}%`);
+            grp.select(".ring").attr("stroke", node.borderColor);
 
-            // Update neon glow
+            // Update glow
             grp.style("filter", bubbleGlowFilter(node.delta, newMaxAbs));
 
-            // ── Volume spike animation: bubble pulses out then bounces back ──
+            // Update text labels
+            grp.select(".label-top")
+              .attr("fill", node.priceChange >= 0 ? "#81c784" : "#e57373")
+              .attr("y",    node.radius >= 30 ? -lineGap(node.radius) : 9999)
+              .style("display", node.radius < 30 ? "none" : "")
+              .text(`${node.priceChange >= 0 ? "▲" : "▼"} ${Math.abs(node.priceChange).toFixed(2)}%`);
+
+            grp.select(".label-ticker")
+              .attr("y", node.radius >= 42 ? -subFS(node.radius) * 0.35 : 0);
+
+            grp.select(".label-vol")
+              .attr("y",    node.radius >= 42 ? lineGap(node.radius) - subFS(node.radius) * 0.5 : 9999)
+              .style("display", node.radius < 42 ? "none" : "")
+              .text(`v/${fmtVol(node.volume)}`);
+
+            // ── Volume spike animation ─────────────────────────────────────
             if (isSpiked) {
               grp.select(".body")
-                .transition().duration(220).ease(d3.easeQuadOut)
-                  .attr("r", node.radius * 1.35)
-                .transition().duration(450).ease(d3.easeBounceOut)
+                .transition().duration(200).ease(d3.easeQuadOut)
+                  .attr("r", node.radius * 1.32)
+                .transition().duration(420).ease(d3.easeBounceOut)
                   .attr("r", node.radius);
-              grp.select(".halo")
-                .transition().duration(220)
-                  .attr("r", node.radius * 1.35 + 5).attr("opacity", 0.9)
-                .transition().duration(450)
-                  .attr("r", node.radius + 5).attr("opacity", 0.45);
+              grp.select(".ring")
+                .transition().duration(200)
+                  .attr("r", node.radius * 1.32 + 2.5).attr("opacity", 1)
+                .transition().duration(420)
+                  .attr("r", node.radius + 2.5).attr("opacity", 0.75);
               grp.select(".shine")
-                .transition().duration(220).attr("r", node.radius * 1.35)
-                .transition().duration(450).attr("r", node.radius);
+                .transition().duration(200).attr("r", node.radius * 1.32)
+                .transition().duration(420).attr("r", node.radius);
               grp.select(".vignette")
-                .transition().duration(220).attr("r", node.radius * 1.35)
-                .transition().duration(450).attr("r", node.radius);
+                .transition().duration(200).attr("r", node.radius * 1.32)
+                .transition().duration(420).attr("r", node.radius);
             } else {
               grp.select(".body").attr("r", node.radius);
-              grp.select(".halo").attr("r", node.radius + 5);
+              grp.select(".ring").attr("r", node.radius + 2.5);
               grp.select(".shine").attr("r", node.radius);
               grp.select(".vignette").attr("r", node.radius);
             }
@@ -506,7 +521,7 @@ export default function BinanceBubbleChart() {
 
           // Gentle nudge so collision respects updated radii
           simRef.current?.force("collide",
-            d3.forceCollide<BubbleNode>(d => d.radius + 5).strength(0.9).iterations(5)
+            d3.forceCollide<BubbleNode>(d => d.radius + 1.5).strength(0.95).iterations(6)
           );
           simRef.current?.alpha(0.12).restart();
         }, 800);
@@ -635,23 +650,14 @@ export default function BinanceBubbleChart() {
           className="fixed inset-0 z-[170] overflow-hidden"
           style={{ background: "#000000" }}
         >
-          {/* Subtle grid texture on black background */}
-          <div
-            className="absolute inset-0 pointer-events-none"
-            style={{
-              backgroundImage:
-                "linear-gradient(rgba(0,229,255,0.025) 1px,transparent 1px)," +
-                "linear-gradient(90deg,rgba(0,229,255,0.025) 1px,transparent 1px)",
-              backgroundSize: "48px 48px",
-            }}
-          />
+          {/* Pure black — no grid, matches Stockmap style */}
 
           {/* ── Header bar ─────────────────────────────────────────────────── */}
           <div
             className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-5 py-2.5 gap-3"
             style={{
               background: "linear-gradient(180deg,rgba(0,0,0,0.97) 0%,rgba(0,0,0,0.7) 70%,transparent 100%)",
-              borderBottom: "1px solid rgba(0,229,255,0.12)",
+              borderBottom: "1px solid rgba(76,175,80,0.15)",
             }}
           >
             {/* Title */}
@@ -735,24 +741,24 @@ export default function BinanceBubbleChart() {
               </div>
 
               {/* Color legend */}
-              <div className="hidden md:flex items-center gap-3 text-[9px]" style={{ color: "#445566" }}>
+              <div className="hidden md:flex items-center gap-3 text-[9px]" style={{ color: "#556677" }}>
                 <div className="flex items-center gap-1.5">
                   <span className="h-2.5 w-2.5 rounded-full" style={{
-                    background: "#00e5ff",
-                    boxShadow: "0 0 6px rgba(0,229,255,0.7)",
+                    background: "#4caf50",
+                    boxShadow: "0 0 6px rgba(76,175,80,0.65)",
                   }}/>
-                  <span style={{ color: "#00c8e0" }}>Net Buyers</span>
+                  <span style={{ color: "#81c784" }}>Net Buyers</span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#252535" }}/>
+                  <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#1e2128" }}/>
                   Neutral
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="h-2.5 w-2.5 rounded-full" style={{
-                    background: "#ff0066",
-                    boxShadow: "0 0 6px rgba(255,0,102,0.7)",
+                    background: "#f44336",
+                    boxShadow: "0 0 6px rgba(244,67,54,0.65)",
                   }}/>
-                  <span style={{ color: "#ff4488" }}>Net Sellers</span>
+                  <span style={{ color: "#e57373" }}>Net Sellers</span>
                 </div>
               </div>
 
@@ -783,9 +789,9 @@ export default function BinanceBubbleChart() {
           {loading && (
             <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4">
               <div className="h-14 w-14 rounded-full border-4 animate-spin"
-                style={{ borderColor: "rgba(0,229,255,0.15)", borderTopColor: "#00e5ff",
-                  boxShadow: "0 0 20px rgba(0,229,255,0.35)" }} />
-              <p className="text-sm" style={{ color: "#00c8e0" }}>
+                style={{ borderColor: "rgba(76,175,80,0.15)", borderTopColor: "#4caf50",
+                  boxShadow: "0 0 18px rgba(76,175,80,0.3)" }} />
+              <p className="text-sm" style={{ color: "#81c784" }}>
                 {timeframe !== "24H" ? `Fetching ${timeframe} klines for top 60 pairs…` : "Fetching Binance 24H data…"}
               </p>
             </div>
@@ -820,8 +826,8 @@ export default function BinanceBubbleChart() {
           {tooltip.visible && tooltip.node && (() => {
             const n       = tooltip.node;
             const isBull  = n.delta >= 0;
-            const accentC = isBull ? "#00e5ff" : "#ff0066";
-            const accentS = isBull ? "rgba(0,229,255,0.18)" : "rgba(255,0,102,0.18)";
+            const accentC = isBull ? "#4caf50" : "#f44336";
+            const accentS = isBull ? "rgba(76,175,80,0.18)" : "rgba(244,67,54,0.18)";
             return (
               <div
                 className="pointer-events-none fixed z-30 rounded-xl px-3.5 py-3 backdrop-blur-md"
@@ -895,7 +901,7 @@ export default function BinanceBubbleChart() {
           {/* Bottom hint */}
           <div
             className="absolute bottom-3 left-1/2 text-[9px] text-center select-none"
-            style={{ transform: "translateX(-50%)", color: "rgba(0,229,255,0.22)", letterSpacing: "0.06em" }}
+            style={{ transform: "translateX(-50%)", color: "rgba(255,255,255,0.15)", letterSpacing: "0.06em" }}
           >
             Bubble size = {timeframe} volume &nbsp;·&nbsp; Color = buy/sell flow &nbsp;·&nbsp; Click any bubble to trade on Binance
           </div>
