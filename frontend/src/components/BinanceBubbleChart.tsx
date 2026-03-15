@@ -66,15 +66,21 @@ function bubbleBorderColor(delta: number, maxAbs: number): string {
   return delta > 0 ? `rgba(102,187,106,${al})` : `rgba(239,83,80,${al})`;
 }
 
-// CSS drop-shadow glow — soft green/red trading style
+// Neon glow: two stacked drop-shadows — tight bright inner + wide soft halo
+// Intensity scales with |delta| so dominant movers glow the strongest
 function bubbleGlowFilter(delta: number, maxAbs: number): string {
   if (maxAbs === 0 || Math.abs(delta) < maxAbs * 0.04) return "none";
-  const t    = Math.min(Math.abs(delta) / maxAbs, 1);
-  const blur = Math.round(3 + t * 10);   // 3 → 13 px  (softer than neon)
-  const al   = (0.18 + t * 0.45).toFixed(2);
-  return delta > 0
-    ? `drop-shadow(0 0 ${blur}px rgba(76,175,80,${al}))`
-    : `drop-shadow(0 0 ${blur}px rgba(244,67,54,${al}))`;
+  const t      = Math.min(Math.abs(delta) / maxAbs, 1);
+  const inner  = Math.round(2 + t * 6);     // tight core  2 → 8 px
+  const outer  = Math.round(8 + t * 14);    // wide halo   8 → 22 px
+  const alIn   = (0.55 + t * 0.40).toFixed(2);  // 0.55 → 0.95
+  const alOut  = (0.12 + t * 0.20).toFixed(2);  // 0.12 → 0.32
+  if (delta > 0) {
+    return `drop-shadow(0 0 ${inner}px rgba(76,175,80,${alIn})) ` +
+           `drop-shadow(0 0 ${outer}px rgba(76,175,80,${alOut}))`;
+  }
+  return `drop-shadow(0 0 ${inner}px rgba(244,67,54,${alIn})) ` +
+         `drop-shadow(0 0 ${outer}px rgba(244,67,54,${alOut}))`;
 }
 
 // ─── Radius scale (sqrt so area ∝ volume) ────────────────────────────────────
@@ -242,32 +248,78 @@ export default function BinanceBubbleChart() {
 
     const defs = svg.append("defs");
 
-    // ── Per-bubble fill gradients (sphere depth) ──────────────────────────────
+    // ── CSS: smooth radius/fill transitions + text-shadow for all labels ─────
+    // CSS transitions on SVG attributes are supported in all modern browsers.
+    // cubic-bezier spring gives a slight overshoot bounce when radius changes.
+    defs.append("style").text(`
+      .bubble .body,
+      .bubble .ring,
+      .bubble .shine,
+      .bubble .glass,
+      .bubble .vignette {
+        transition: r 0.48s cubic-bezier(0.34,1.56,0.64,1);
+      }
+      .bubble .body {
+        transition: r 0.48s cubic-bezier(0.34,1.56,0.64,1),
+                    fill 0.5s ease,
+                    stroke 0.5s ease;
+      }
+      .bubble text {
+        filter: drop-shadow(0 1px 3px rgba(0,0,0,0.92))
+                drop-shadow(0 0  6px rgba(0,0,0,0.6));
+        font-family: ${FONT};
+      }
+    `);
+
+    // ── Background grid pattern (cyberpunk digital space feel) ───────────────
+    const gridPat = defs.append("pattern")
+      .attr("id",           "bg-grid")
+      .attr("width",        "44")
+      .attr("height",       "44")
+      .attr("patternUnits", "userSpaceOnUse");
+    // Horizontal line
+    gridPat.append("line")
+      .attr("x1", "0").attr("y1", "44").attr("x2", "44").attr("y2", "44")
+      .attr("stroke", "rgba(255,255,255,0.035)").attr("stroke-width", "0.5");
+    // Vertical line
+    gridPat.append("line")
+      .attr("x1", "44").attr("y1", "0").attr("x2", "44").attr("y2", "44")
+      .attr("stroke", "rgba(255,255,255,0.035)").attr("stroke-width", "0.5");
+
+    // Paint the grid before any bubble (pointer-events none so it doesn't block)
+    svg.append("rect")
+      .attr("width",  dims.w)
+      .attr("height", dims.h)
+      .attr("fill",   "url(#bg-grid)")
+      .attr("pointer-events", "none");
+
+    // ── Per-bubble fill gradients: vivid bright center → deep dark edge ───────
+    // 3-stop radial: very bright at top-left (light) → base color → near-black edge
     nodes.forEach(n => {
       const base    = d3.color(n.color) ?? d3.rgb(30, 33, 40);
-      const lighter = (base as d3.RGBColor).brighter(0.55).formatRgb();
-      const darker  = (base as d3.RGBColor).darker(1.4).formatRgb();
+      const lighter = (base as d3.RGBColor).brighter(1.1).formatRgb();  // vivid highlight
+      const darker  = (base as d3.RGBColor).darker(2.2).formatRgb();    // deep shadow edge
 
       const fg = defs.append("radialGradient")
         .attr("id", `fill-${n.id}`)
-        .attr("cx", "42%").attr("cy", "38%").attr("r", "68%");
-      fg.append("stop").attr("offset",  "0%").attr("stop-color", lighter);
-      fg.append("stop").attr("offset", "50%").attr("stop-color", n.color);
-      fg.append("stop").attr("offset","100%").attr("stop-color", darker);
+        .attr("cx", "40%").attr("cy", "36%").attr("r", "70%");
+      fg.append("stop").attr("offset",  "0%").attr("stop-color", lighter).attr("stop-opacity", "1");
+      fg.append("stop").attr("offset", "45%").attr("stop-color", n.color).attr("stop-opacity", "1");
+      fg.append("stop").attr("offset","100%").attr("stop-color", darker).attr("stop-opacity", "1");
     });
 
     // Shared specular highlight (white lens-flare applied on top of every bubble)
     const sg = defs.append("radialGradient").attr("id", "shine-shared")
-      .attr("cx", "33%").attr("cy", "28%").attr("r", "50%");
-    sg.append("stop").attr("offset",  "0%").attr("stop-color", "rgba(255,255,255,0.35)");
-    sg.append("stop").attr("offset", "55%").attr("stop-color", "rgba(255,255,255,0.04)");
+      .attr("cx", "30%").attr("cy", "26%").attr("r", "45%");
+    sg.append("stop").attr("offset",  "0%").attr("stop-color", "rgba(255,255,255,0.45)");
+    sg.append("stop").attr("offset", "50%").attr("stop-color", "rgba(255,255,255,0.05)");
     sg.append("stop").attr("offset","100%").attr("stop-color", "rgba(255,255,255,0)");
 
     // Shared vignette (edge darkening)
     const vg = defs.append("radialGradient").attr("id", "vignette-shared")
       .attr("cx", "50%").attr("cy", "50%").attr("r", "50%");
-    vg.append("stop").attr("offset", "50%").attr("stop-color", "rgba(0,0,0,0)");
-    vg.append("stop").attr("offset","100%").attr("stop-color", "rgba(0,0,0,0.50)");
+    vg.append("stop").attr("offset", "45%").attr("stop-color", "rgba(0,0,0,0)");
+    vg.append("stop").attr("offset","100%").attr("stop-color", "rgba(0,0,0,0.60)");
 
     // ── One <g> per bubble ───────────────────────────────────────────────────
     const g = svg.selectAll<SVGGElement, BubbleNode>("g.bubble")
@@ -277,28 +329,37 @@ export default function BinanceBubbleChart() {
       .style("cursor", "pointer")
       .style("filter", d => bubbleGlowFilter(d.delta, maxAbsDelta));
 
-    // Visible ring (Stockmap-style prominent border)
+    // Coloured ring (prominent Stockmap-style border, reacts to buy/sell state)
     g.append("circle").attr("class", "ring")
       .attr("r",  d => d.radius + 2.5)
       .attr("fill", "none")
       .attr("stroke", d => d.borderColor)
-      .attr("stroke-width", 2)
-      .attr("opacity", 0.75);
+      .attr("stroke-width", 2.2)
+      .attr("opacity", 0.80);
 
-    // Main body
+    // Main body — gradient fill, no extra stroke (cleaner, glass handles it)
     g.append("circle").attr("class", "body")
-      .attr("r",            d => d.radius)
-      .attr("fill",         d => `url(#fill-${d.id})`)
-      .attr("stroke",       d => d.borderColor)
-      .attr("stroke-width", 1)
-      .attr("opacity",      0.93);
+      .attr("r",       d => d.radius)
+      .attr("fill",    d => `url(#fill-${d.id})`)
+      .attr("opacity", 0.95);
 
-    // Specular shine + vignette overlays
+    // Specular shine overlay
     g.append("circle").attr("class", "shine")
       .attr("r", d => d.radius).attr("fill", "url(#shine-shared)")
       .attr("pointer-events", "none");
+
+    // Vignette (edge darkening)
     g.append("circle").attr("class", "vignette")
       .attr("r", d => d.radius).attr("fill", "url(#vignette-shared)")
+      .attr("pointer-events", "none");
+
+    // ── Glass edge: thin white stroke simulating curved glass surface ─────────
+    // stroke-width 0.5, opacity 0.28 — subtle but gives depth
+    g.append("circle").attr("class", "glass")
+      .attr("r",            d => d.radius - 0.5)
+      .attr("fill",         "none")
+      .attr("stroke",       "rgba(255,255,255,0.28)")
+      .attr("stroke-width", 0.8)
       .attr("pointer-events", "none");
 
     // ── Helper: compute font sizes + vertical positions for 3-line layout ────
@@ -339,51 +400,51 @@ export default function BinanceBubbleChart() {
       .attr("y", d => d.radius >= 42 ? -subFS(d.radius) * 0.35 : 0)
       .text(d => d.id);
 
-    // ── Volume — bottom line ──────────────────────────────────────────────────
+    // ── Volume — bottom line (shown when radius ≥ 30 px) ─────────────────────
     g.append("text").attr("class", "label-vol")
       .attr("text-anchor", "middle")
       .attr("dominant-baseline", "middle")
-      .attr("fill", "rgba(210,220,230,0.65)")
+      .attr("fill", "rgba(210,220,230,0.70)")
       .attr("font-family", FONT)
       .attr("font-weight", "400")
       .style("font-size",      d => `${subFS(d.radius)}px`)
       .style("pointer-events", "none")
-      .attr("y", d => d.radius >= 42 ? lineGap(d.radius) - subFS(d.radius) * 0.5 : 9999)
-      .style("display",        d => d.radius < 42 ? "none" : "")
+      // text-shadow is applied via the shared CSS rule in defs <style>
+      .attr("y", d => d.radius >= 30 ? lineGap(d.radius) - subFS(d.radius) * 0.5 : 9999)
+      .style("display",        d => d.radius < 30 ? "none" : "")
       .text(d => `v/${fmtVol(d.volume)}`);
 
     // ── Hover / click ─────────────────────────────────────────────────────────
+    // On hover: maximise both glow layers so the bubble blazes with colour
     const hoverGlow = (d: BubbleNode) =>
       d.delta >= 0
-        ? "drop-shadow(0 0 18px rgba(76,175,80,0.85))"
-        : "drop-shadow(0 0 18px rgba(244,67,54,0.85))";
+        ? "drop-shadow(0 0 10px rgba(76,175,80,0.95)) drop-shadow(0 0 24px rgba(76,175,80,0.45))"
+        : "drop-shadow(0 0 10px rgba(244,67,54,0.95)) drop-shadow(0 0 24px rgba(244,67,54,0.45))";
+
+    const expandAll = (sel: d3.Selection<SVGGElement, BubbleNode, any, any>,
+                       d: BubbleNode, scale: number, dur: number) => {
+      const r = d.radius * scale;
+      sel.select(".body")   .transition().duration(dur).attr("r", r);
+      sel.select(".ring")   .transition().duration(dur).attr("r", r + 2.5);
+      sel.select(".shine")  .transition().duration(dur).attr("r", r);
+      sel.select(".glass")  .transition().duration(dur).attr("r", r - 0.5);
+      sel.select(".vignette").transition().duration(dur).attr("r", r);
+    };
 
     g.on("mouseenter", function (event, d) {
-        d3.select(this).transition().duration(120).style("filter", hoverGlow(d));
-        d3.select(this).select(".body")
-          .transition().duration(120).attr("r", d.radius * 1.08);
-        d3.select(this).select(".ring")
-          .transition().duration(120).attr("r", d.radius * 1.08 + 2.5).attr("opacity", 1);
-        d3.select(this).select(".shine")
-          .transition().duration(120).attr("r", d.radius * 1.08);
-        d3.select(this).select(".vignette")
-          .transition().duration(120).attr("r", d.radius * 1.08);
+        d3.select(this).transition().duration(100).style("filter", hoverGlow(d));
+        d3.select(this).select(".ring").transition().duration(100).attr("opacity", 1);
+        expandAll(d3.select(this), d, 1.09, 100);
         setTooltip({ visible: true, x: event.clientX, y: event.clientY, node: d });
       })
       .on("mousemove", (event) => {
         setTooltip(prev => ({ ...prev, x: event.clientX, y: event.clientY }));
       })
       .on("mouseleave", function (_event, d) {
-        d3.select(this).transition().duration(200)
+        d3.select(this).transition().duration(180)
           .style("filter", bubbleGlowFilter(d.delta, maxAbsDelta));
-        d3.select(this).select(".body")
-          .transition().duration(200).attr("r", d.radius);
-        d3.select(this).select(".ring")
-          .transition().duration(200).attr("r", d.radius + 2.5).attr("opacity", 0.75);
-        d3.select(this).select(".shine")
-          .transition().duration(200).attr("r", d.radius);
-        d3.select(this).select(".vignette")
-          .transition().duration(200).attr("r", d.radius);
+        d3.select(this).select(".ring").transition().duration(180).attr("opacity", 0.80);
+        expandAll(d3.select(this), d, 1.0, 180);
         setTooltip(prev => ({ ...prev, visible: false }));
       })
       .on("click", (_event, d) => {
@@ -489,32 +550,33 @@ export default function BinanceBubbleChart() {
               .attr("y", node.radius >= 42 ? -subFS(node.radius) * 0.35 : 0);
 
             grp.select(".label-vol")
-              .attr("y",    node.radius >= 42 ? lineGap(node.radius) - subFS(node.radius) * 0.5 : 9999)
-              .style("display", node.radius < 42 ? "none" : "")
+              .attr("y",    node.radius >= 30 ? lineGap(node.radius) - subFS(node.radius) * 0.5 : 9999)
+              .style("display", node.radius < 30 ? "none" : "")
               .text(`v/${fmtVol(node.volume)}`);
 
             // ── Volume spike animation ─────────────────────────────────────
             if (isSpiked) {
+              const peak = node.radius * 1.32;
               grp.select(".body")
-                .transition().duration(200).ease(d3.easeQuadOut)
-                  .attr("r", node.radius * 1.32)
-                .transition().duration(420).ease(d3.easeBounceOut)
-                  .attr("r", node.radius);
+                .transition().duration(200).ease(d3.easeQuadOut).attr("r", peak)
+                .transition().duration(420).ease(d3.easeBounceOut).attr("r", node.radius);
               grp.select(".ring")
-                .transition().duration(200)
-                  .attr("r", node.radius * 1.32 + 2.5).attr("opacity", 1)
-                .transition().duration(420)
-                  .attr("r", node.radius + 2.5).attr("opacity", 0.75);
+                .transition().duration(200).attr("r", peak + 2.5).attr("opacity", 1)
+                .transition().duration(420).attr("r", node.radius + 2.5).attr("opacity", 0.80);
               grp.select(".shine")
-                .transition().duration(200).attr("r", node.radius * 1.32)
+                .transition().duration(200).attr("r", peak)
                 .transition().duration(420).attr("r", node.radius);
+              grp.select(".glass")
+                .transition().duration(200).attr("r", peak - 0.5)
+                .transition().duration(420).attr("r", node.radius - 0.5);
               grp.select(".vignette")
-                .transition().duration(200).attr("r", node.radius * 1.32)
+                .transition().duration(200).attr("r", peak)
                 .transition().duration(420).attr("r", node.radius);
             } else {
               grp.select(".body").attr("r", node.radius);
               grp.select(".ring").attr("r", node.radius + 2.5);
               grp.select(".shine").attr("r", node.radius);
+              grp.select(".glass").attr("r", node.radius - 0.5);
               grp.select(".vignette").attr("r", node.radius);
             }
           });
