@@ -45,49 +45,83 @@ const MAX_RADIUS = 100;
 // GREEN  = Active BUY flow dominant  (buyers aggressively lifting asks)
 // RED    = Active SELL flow dominant  (sellers hitting bids / exit pressure)
 // GREY   = Neutral / balanced supply-demand — neither side controls
-const GREEN_DIM    = "#0b1f0b";
-const GREEN_BRIGHT = "#4caf50";
-const RED_DIM      = "#1f0b0b";
-const RED_BRIGHT   = "#f44336";
-const NEUTRAL_COL  = "#3a3d4a";   // visible grey on black bg
+//
+// Saturation & Value gradient (3-tier per side):
+//   Weak delta   →  dark, desaturated  (muted — doesn't draw the eye)
+//   Medium delta →  standard vibrant   (clear buy/sell signal)
+//   Strong delta →  neon electric      (screams "hotspot!" on screen)
+// Uses HSL interpolation so saturation ramps naturally alongside lightness.
+const NEUTRAL_COL  = "#3a3d4a";
+
+// Green: dark forest → standard green → electric neon lime
+const GREEN_WEAK   = "hsl(125, 20%, 12%)";   // desaturated, very dark
+const GREEN_MID    = "hsl(122, 39%, 49%)";   // #4caf50 equivalent
+const GREEN_NEON   = "hsl(120, 100%, 65%)";  // electric neon green
+
+// Red: dark maroon → standard red → electric neon magenta-red
+const RED_WEAK     = "hsl(0, 20%, 14%)";     // desaturated, very dark
+const RED_MID      = "hsl(4, 90%, 58%)";     // #f44336 equivalent
+const RED_NEON     = "hsl(355, 100%, 65%)";  // electric neon red-pink
+
+// Pre-build HSL interpolators — two-segment piecewise for each side:
+//   t ∈ [0, 0.5] → WEAK → MID  (muted zone)
+//   t ∈ [0.5, 1] → MID  → NEON (hot zone — saturation maxes out)
+const greenLow  = d3.interpolateHsl(GREEN_WEAK, GREEN_MID);
+const greenHigh = d3.interpolateHsl(GREEN_MID,  GREEN_NEON);
+const redLow    = d3.interpolateHsl(RED_WEAK,   RED_MID);
+const redHigh   = d3.interpolateHsl(RED_MID,    RED_NEON);
 
 function bubbleColor(delta: number, maxAbs: number): string {
   if (maxAbs === 0 || Math.abs(delta) < maxAbs * 0.03) return NEUTRAL_COL;
-  const t = Math.pow(Math.min(Math.abs(delta) / maxAbs, 1), 0.6);
-  return delta > 0
-    ? d3.interpolateRgb(GREEN_DIM, GREEN_BRIGHT)(t)
-    : d3.interpolateRgb(RED_DIM,   RED_BRIGHT)(t);
+  // Gamma 0.55 ensures mid-range deltas already get noticeable colour
+  const t = Math.pow(Math.min(Math.abs(delta) / maxAbs, 1), 0.55);
+  if (delta > 0) {
+    return t <= 0.5 ? greenLow(t * 2) : greenHigh((t - 0.5) * 2);
+  }
+  return t <= 0.5 ? redLow(t * 2) : redHigh((t - 0.5) * 2);
 }
 
 function bubbleBorderColor(delta: number, maxAbs: number): string {
   if (maxAbs === 0 || Math.abs(delta) < maxAbs * 0.03) return "rgba(120,125,145,0.40)";
   const t  = Math.min(Math.abs(delta) / maxAbs, 1);
-  const al = (0.45 + t * 0.45).toFixed(2);   // always fairly visible ring
-  return delta > 0 ? `rgba(102,187,106,${al})` : `rgba(239,83,80,${al})`;
+  const al = (0.45 + t * 0.50).toFixed(2);
+  // Border follows same hue but at fixed mid-lightness for consistency
+  if (delta > 0) {
+    return t > 0.7
+      ? `rgba(100,255,130,${al})`   // neon green border at extreme
+      : `rgba(102,187,106,${al})`;  // standard green border
+  }
+  return t > 0.7
+    ? `rgba(255,100,120,${al})`     // neon red border at extreme
+    : `rgba(239,83,80,${al})`;      // standard red border
 }
 
-// Neon glow & bloom: 3-layer stacked drop-shadows
-// Layer 1: tight bright core — makes the edge glow crisp
-// Layer 2: medium bloom — gives the neon "haze"
-// Layer 3: wide ambient — fills surrounding space with colour wash
-// Neutral (low |delta|) still gets a subtle dim glow so no bubble is invisible
+// Neon glow & bloom: 3-layer stacked drop-shadows.
+// At extreme deltas the glow radius and alpha both max out, creating a
+// visible "hot spot" beacon effect that draws the user's eye instantly.
 function bubbleGlowFilter(delta: number, maxAbs: number): string {
   if (maxAbs === 0) return "none";
   const t = Math.min(Math.abs(delta) / maxAbs, 1);
 
-  // Neutral bubbles: soft grey glow so they remain visible
   if (t < 0.04) {
     return "drop-shadow(0 0 4px rgba(150,155,175,0.30))";
   }
 
-  const core   = Math.round(2 + t * 7);      // 2 → 9 px
-  const bloom  = Math.round(7 + t * 12);     // 7 → 19 px
-  const ambient = Math.round(16 + t * 18);   // 16 → 34 px
-  const aCo = (0.60 + t * 0.38).toFixed(2);  // core:    0.60 → 0.98
-  const aBl = (0.20 + t * 0.30).toFixed(2);  // bloom:   0.20 → 0.50
-  const aAm = (0.05 + t * 0.12).toFixed(2);  // ambient: 0.05 → 0.17
+  const core    = Math.round(2 + t * 8);     // 2 → 10 px
+  const bloom   = Math.round(7 + t * 14);    // 7 → 21 px
+  const ambient = Math.round(16 + t * 22);   // 16 → 38 px
+  const aCo = (0.55 + t * 0.44).toFixed(2);  // 0.55 → 0.99
+  const aBl = (0.18 + t * 0.35).toFixed(2);  // 0.18 → 0.53
+  const aAm = (0.04 + t * 0.16).toFixed(2);  // 0.04 → 0.20
 
-  const rgb = delta > 0 ? "76,175,80" : "244,67,54";
+  // At extreme delta (t > 0.7) switch to neon-bright glow RGB values
+  let rgb: string;
+  if (delta > 0) {
+    rgb = t > 0.7 ? "100,255,130" : "76,175,80";
+  } else {
+    rgb = t > 0.7 ? "255,100,120" : "244,67,54";
+  }
+
   return `drop-shadow(0 0 ${core}px rgba(${rgb},${aCo})) ` +
          `drop-shadow(0 0 ${bloom}px rgba(${rgb},${aBl})) ` +
          `drop-shadow(0 0 ${ambient}px rgba(${rgb},${aAm}))`;
