@@ -41,15 +41,15 @@ const TOP_N      = 80;
 const MIN_RADIUS = 24;
 const MAX_RADIUS = 100;
 
-// ─── Stockmap-style trading color palette ─────────────────────────────────────
-// Buyers  : deep forest green → vivid bright green  #4caf50
-// Sellers : deep blood red    → vivid bright red     #f44336
-// Neutral : dark slate                               #1e2128
+// ─── Semantic trading color palette ───────────────────────────────────────────
+// GREEN  = Active BUY flow dominant  (buyers aggressively lifting asks)
+// RED    = Active SELL flow dominant  (sellers hitting bids / exit pressure)
+// GREY   = Neutral / balanced supply-demand — neither side controls
 const GREEN_DIM    = "#0b1f0b";
 const GREEN_BRIGHT = "#4caf50";
 const RED_DIM      = "#1f0b0b";
 const RED_BRIGHT   = "#f44336";
-const NEUTRAL_COL  = "#1e2128";
+const NEUTRAL_COL  = "#3a3d4a";   // visible grey on black bg
 
 function bubbleColor(delta: number, maxAbs: number): string {
   if (maxAbs === 0 || Math.abs(delta) < maxAbs * 0.03) return NEUTRAL_COL;
@@ -60,7 +60,7 @@ function bubbleColor(delta: number, maxAbs: number): string {
 }
 
 function bubbleBorderColor(delta: number, maxAbs: number): string {
-  if (maxAbs === 0 || Math.abs(delta) < maxAbs * 0.03) return "rgba(50,55,70,0.5)";
+  if (maxAbs === 0 || Math.abs(delta) < maxAbs * 0.03) return "rgba(120,125,145,0.40)";
   const t  = Math.min(Math.abs(delta) / maxAbs, 1);
   const al = (0.45 + t * 0.45).toFixed(2);   // always fairly visible ring
   return delta > 0 ? `rgba(102,187,106,${al})` : `rgba(239,83,80,${al})`;
@@ -75,9 +75,9 @@ function bubbleGlowFilter(delta: number, maxAbs: number): string {
   if (maxAbs === 0) return "none";
   const t = Math.min(Math.abs(delta) / maxAbs, 1);
 
-  // Even near-neutral bubbles get a faint warm glow
+  // Neutral bubbles: soft grey glow so they remain visible
   if (t < 0.04) {
-    return "drop-shadow(0 0 3px rgba(100,110,130,0.25))";
+    return "drop-shadow(0 0 4px rgba(150,155,175,0.30))";
   }
 
   const core   = Math.round(2 + t * 7);      // 2 → 9 px
@@ -873,7 +873,7 @@ export default function BinanceBubbleChart() {
                   Binance Bubble Chart
                 </h1>
                 <p className="text-slate-600 text-[9px] mt-0.5">
-                  {nodeCount} pairs · Size = Volume · Color = Buy/Sell flow
+                  {nodeCount} pairs · Size = Volume · Green = Buy · Red = Sell · Grey = Balanced
                   {wsLive && <span className="ml-1.5 text-emerald-500">● LIVE</span>}
                   {!wsLive && <span className="ml-1.5 text-slate-600">○ connecting…</span>}
                 </p>
@@ -939,25 +939,28 @@ export default function BinanceBubbleChart() {
                 )}
               </div>
 
-              {/* Color legend */}
-              <div className="hidden md:flex items-center gap-3 text-[9px]" style={{ color: "#556677" }}>
+              {/* Semantic color legend */}
+              <div className="hidden md:flex items-center gap-3.5 text-[9px]" style={{ color: "#667788" }}>
                 <div className="flex items-center gap-1.5">
                   <span className="h-2.5 w-2.5 rounded-full" style={{
                     background: "#4caf50",
                     boxShadow: "0 0 6px rgba(76,175,80,0.65)",
                   }}/>
-                  <span style={{ color: "#81c784" }}>Net Buyers</span>
+                  <span style={{ color: "#81c784" }}>Active Buy Flow</span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#1e2128" }}/>
-                  Neutral
+                  <span className="h-2.5 w-2.5 rounded-full" style={{
+                    background: "#3a3d4a",
+                    boxShadow: "0 0 4px rgba(150,155,175,0.30)",
+                  }}/>
+                  <span style={{ color: "#8a8fa0" }}>Balanced</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="h-2.5 w-2.5 rounded-full" style={{
                     background: "#f44336",
                     boxShadow: "0 0 6px rgba(244,67,54,0.65)",
                   }}/>
-                  <span style={{ color: "#e57373" }}>Net Sellers</span>
+                  <span style={{ color: "#e57373" }}>Active Sell Flow</span>
                 </div>
               </div>
 
@@ -1083,9 +1086,9 @@ export default function BinanceBubbleChart() {
                     </p>
                   </div>
                   <div>
-                    <p style={{ color: "#445566" }}>Signal</p>
+                    <p style={{ color: "#445566" }}>Flow</p>
                     <p className="font-bold" style={{ color: accentC }}>
-                      {Math.abs(n.priceChange) < 0.5 ? "Neutral" : isBull ? "Bullish" : "Bearish"}
+                      {Math.abs(n.priceChange) < 0.5 ? "Balanced" : isBull ? "Buy Dominant" : "Sell Dominant"}
                     </p>
                   </div>
                 </div>
@@ -1102,7 +1105,7 @@ export default function BinanceBubbleChart() {
             className="absolute bottom-3 left-1/2 text-[9px] text-center select-none"
             style={{ transform: "translateX(-50%)", color: "rgba(255,255,255,0.15)", letterSpacing: "0.06em" }}
           >
-            Bubble size = {timeframe} volume &nbsp;·&nbsp; Color = buy/sell flow &nbsp;·&nbsp; Click any bubble to trade on Binance
+            Size = {timeframe} volume &nbsp;·&nbsp; <span style={{color:"#81c784"}}>Green</span> = Buy dominant &nbsp;·&nbsp; <span style={{color:"#e57373"}}>Red</span> = Sell dominant &nbsp;·&nbsp; <span style={{color:"#8a8fa0"}}>Grey</span> = Balanced &nbsp;·&nbsp; Click to trade
           </div>
         </div>
       )}
