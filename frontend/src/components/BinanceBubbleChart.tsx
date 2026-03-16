@@ -238,6 +238,7 @@ export default function BinanceBubbleChart() {
       wsRef.current?.close();
       wsRef.current = null;
       setWsLive(false);
+      defsReady.current = false;
     }
   }, [open]);
 
@@ -248,215 +249,271 @@ export default function BinanceBubbleChart() {
     return () => window.removeEventListener("keydown", h);
   }, []);
 
-  // ── D3 draw/init (Stockmap-style: dense pack, 3-line text, green/red) ────────
+  // ── Shared defs + text sizing helpers ─────────────────────────────────────
+  const FONT = "'Inter','SF Pro Text',-apple-system,BlinkMacSystemFont,sans-serif";
+  const tickerFS  = (r: number) => Math.max(8,  Math.min(r * 0.40, 26));
+  const subFS     = (r: number) => Math.max(6,  Math.min(r * 0.26, 14));
+  const lineGap   = (r: number) => tickerFS(r) * 1.15 + subFS(r) * 0.5;
+
+  // Adaptive opacity: text fades out smoothly instead of hard show/hide
+  const tickerOp  = (r: number) => r < 16 ? 0 : r < 22 ? (r - 16) / 6 : 1;
+  const subOp     = (r: number) => r < 26 ? 0 : r < 32 ? (r - 26) / 6 : 1;
+  const volOp     = (r: number) => r < 28 ? 0 : r < 36 ? (r - 28) / 8 : 1;
+
+  // Track whether defs (grid, shared gradients, css) are already injected
+  const defsReady = useRef(false);
+
+  // ── D3 draw/update (enter/update/exit for smooth timeframe transitions) ──
   const initD3 = useCallback((nodes: BubbleNode[]) => {
     const svg = d3.select(svgRef.current!);
-    svg.selectAll("*").remove();
-
     const maxAbsDelta = d3.max(nodes.map(n => Math.abs(n.delta))) ?? 1;
-    const FONT = "'Inter','SF Pro Text',-apple-system,BlinkMacSystemFont,sans-serif";
 
-    const defs = svg.append("defs");
+    // ── One-time: inject defs, CSS, grid, shared gradients ───────────────
+    if (!defsReady.current || svg.select("defs").empty()) {
+      svg.selectAll("*").remove();
+      defsReady.current = true;
 
-    // ── CSS: smooth radius/fill transitions + text-shadow for all labels ─────
-    // CSS transitions on SVG attributes are supported in all modern browsers.
-    // cubic-bezier spring gives a slight overshoot bounce when radius changes.
-    defs.append("style").text(`
-      .bubble .body,
-      .bubble .ring,
-      .bubble .shine,
-      .bubble .glass,
-      .bubble .glass-outer,
-      .bubble .vignette {
-        transition: r 0.48s cubic-bezier(0.34,1.56,0.64,1);
-      }
-      .bubble .body {
-        transition: r 0.48s cubic-bezier(0.34,1.56,0.64,1),
-                    fill 0.5s ease,
-                    stroke 0.5s ease;
-      }
-      .bubble text {
-        filter: drop-shadow(0 1px 3px rgba(0,0,0,0.92))
-                drop-shadow(0 0  6px rgba(0,0,0,0.6));
-        font-family: ${FONT};
-      }
-    `);
+      const defs = svg.append("defs");
 
-    // ── Background grid pattern (cyberpunk digital space feel) ───────────────
-    const gridPat = defs.append("pattern")
-      .attr("id",           "bg-grid")
-      .attr("width",        "44")
-      .attr("height",       "44")
-      .attr("patternUnits", "userSpaceOnUse");
-    // Horizontal line
-    gridPat.append("line")
-      .attr("x1", "0").attr("y1", "44").attr("x2", "44").attr("y2", "44")
-      .attr("stroke", "rgba(255,255,255,0.035)").attr("stroke-width", "0.5");
-    // Vertical line
-    gridPat.append("line")
-      .attr("x1", "44").attr("y1", "0").attr("x2", "44").attr("y2", "44")
-      .attr("stroke", "rgba(255,255,255,0.035)").attr("stroke-width", "0.5");
+      defs.append("style").text(`
+        .bubble .body,
+        .bubble .ring,
+        .bubble .shine,
+        .bubble .glass,
+        .bubble .glass-outer,
+        .bubble .vignette {
+          transition: r 0.55s cubic-bezier(0.34,1.56,0.64,1);
+        }
+        .bubble .body {
+          transition: r 0.55s cubic-bezier(0.34,1.56,0.64,1),
+                      fill 0.5s ease,
+                      stroke 0.5s ease;
+        }
+        .bubble text {
+          transition: opacity 0.4s ease, font-size 0.4s ease, y 0.4s ease;
+          filter: drop-shadow(0 1px 3px rgba(0,0,0,0.92))
+                  drop-shadow(0 0  6px rgba(0,0,0,0.6));
+          font-family: ${FONT};
+        }
+      `);
 
-    // Paint the grid before any bubble (pointer-events none so it doesn't block)
-    svg.append("rect")
-      .attr("width",  dims.w)
-      .attr("height", dims.h)
-      .attr("fill",   "url(#bg-grid)")
-      .attr("pointer-events", "none");
+      const gridPat = defs.append("pattern")
+        .attr("id", "bg-grid").attr("width", "44").attr("height", "44")
+        .attr("patternUnits", "userSpaceOnUse");
+      gridPat.append("line")
+        .attr("x1", "0").attr("y1", "44").attr("x2", "44").attr("y2", "44")
+        .attr("stroke", "rgba(255,255,255,0.035)").attr("stroke-width", "0.5");
+      gridPat.append("line")
+        .attr("x1", "44").attr("y1", "0").attr("x2", "44").attr("y2", "44")
+        .attr("stroke", "rgba(255,255,255,0.035)").attr("stroke-width", "0.5");
 
-    // ── Per-bubble fill gradients: 5-stop radial for realistic 3D sphere ─────
-    // Focal point at upper-left (35%/32%) simulates a light source.
-    // Stops:  0% hot white highlight → 18% bright tint → 50% base →
-    //        80% darkened base → 100% near-black edge
+      svg.append("rect").attr("class", "bg-grid-rect")
+        .attr("width", dims.w).attr("height", dims.h)
+        .attr("fill", "url(#bg-grid)").attr("pointer-events", "none");
+
+      // Shared specular highlight
+      const sg = defs.append("radialGradient").attr("id", "shine-shared")
+        .attr("cx", "28%").attr("cy", "24%").attr("r", "40%");
+      sg.append("stop").attr("offset",  "0%").attr("stop-color", "rgba(255,255,255,0.60)");
+      sg.append("stop").attr("offset", "35%").attr("stop-color", "rgba(255,255,255,0.12)");
+      sg.append("stop").attr("offset", "70%").attr("stop-color", "rgba(255,255,255,0.02)");
+      sg.append("stop").attr("offset","100%").attr("stop-color", "rgba(255,255,255,0)");
+
+      // Shared vignette
+      const vg = defs.append("radialGradient").attr("id", "vignette-shared")
+        .attr("cx", "50%").attr("cy", "50%").attr("r", "50%");
+      vg.append("stop").attr("offset", "40%").attr("stop-color", "rgba(0,0,0,0)");
+      vg.append("stop").attr("offset", "85%").attr("stop-color", "rgba(0,0,0,0.30)");
+      vg.append("stop").attr("offset","100%").attr("stop-color", "rgba(0,0,0,0.72)");
+    }
+
+    // Update bg-grid size on resize
+    svg.select(".bg-grid-rect").attr("width", dims.w).attr("height", dims.h);
+
+    // ── Per-bubble gradient defs (create or update) ───────────────────────
+    const defs = svg.select("defs");
     nodes.forEach(n => {
       const base    = d3.color(n.color) ?? d3.rgb(30, 33, 40);
-      const hotspot = (base as d3.RGBColor).brighter(2.0).formatRgb();   // near-white flash
-      const bright  = (base as d3.RGBColor).brighter(1.0).formatRgb();   // vivid tint
-      const mid     = n.color;                                            // true base
-      const shadow  = (base as d3.RGBColor).darker(1.6).formatRgb();     // dark transition
-      const abyss   = (base as d3.RGBColor).darker(3.0).formatRgb();     // near-black rim
+      const hotspot = (base as d3.RGBColor).brighter(2.0).formatRgb();
+      const bright  = (base as d3.RGBColor).brighter(1.0).formatRgb();
+      const mid     = n.color;
+      const shadow  = (base as d3.RGBColor).darker(1.6).formatRgb();
+      const abyss   = (base as d3.RGBColor).darker(3.0).formatRgb();
 
-      const fg = defs.append("radialGradient")
-        .attr("id", `fill-${n.id}`)
-        .attr("cx", "35%").attr("cy", "32%").attr("r", "72%");
-      fg.append("stop").attr("offset",  "0%").attr("stop-color", hotspot);
-      fg.append("stop").attr("offset", "18%").attr("stop-color", bright);
-      fg.append("stop").attr("offset", "50%").attr("stop-color", mid);
-      fg.append("stop").attr("offset", "80%").attr("stop-color", shadow);
-      fg.append("stop").attr("offset","100%").attr("stop-color", abyss);
+      const existing = defs.select(`#fill-${n.id}`);
+      if (existing.empty()) {
+        const fg = defs.append("radialGradient")
+          .attr("id", `fill-${n.id}`)
+          .attr("cx", "35%").attr("cy", "32%").attr("r", "72%");
+        fg.append("stop").attr("offset",  "0%").attr("stop-color", hotspot);
+        fg.append("stop").attr("offset", "18%").attr("stop-color", bright);
+        fg.append("stop").attr("offset", "50%").attr("stop-color", mid);
+        fg.append("stop").attr("offset", "80%").attr("stop-color", shadow);
+        fg.append("stop").attr("offset","100%").attr("stop-color", abyss);
+      } else {
+        const stops = existing.selectAll("stop");
+        stops.filter((_d: unknown, i: number) => i === 0).attr("stop-color", hotspot);
+        stops.filter((_d: unknown, i: number) => i === 1).attr("stop-color", bright);
+        stops.filter((_d: unknown, i: number) => i === 2).attr("stop-color", mid);
+        stops.filter((_d: unknown, i: number) => i === 3).attr("stop-color", shadow);
+        stops.filter((_d: unknown, i: number) => i === 4).attr("stop-color", abyss);
+      }
     });
 
-    // Shared specular highlight — tighter, brighter lens-flare at top-left
-    const sg = defs.append("radialGradient").attr("id", "shine-shared")
-      .attr("cx", "28%").attr("cy", "24%").attr("r", "40%");
-    sg.append("stop").attr("offset",  "0%").attr("stop-color", "rgba(255,255,255,0.60)");
-    sg.append("stop").attr("offset", "35%").attr("stop-color", "rgba(255,255,255,0.12)");
-    sg.append("stop").attr("offset", "70%").attr("stop-color", "rgba(255,255,255,0.02)");
-    sg.append("stop").attr("offset","100%").attr("stop-color", "rgba(255,255,255,0)");
+    // ── Helper: apply all visual attrs for a <g> selection (enter or update) ─
+    const DUR = 600;
 
-    // Shared vignette — deeper edge darkening for stronger sphere curvature
-    const vg = defs.append("radialGradient").attr("id", "vignette-shared")
-      .attr("cx", "50%").attr("cy", "50%").attr("r", "50%");
-    vg.append("stop").attr("offset", "40%").attr("stop-color", "rgba(0,0,0,0)");
-    vg.append("stop").attr("offset", "85%").attr("stop-color", "rgba(0,0,0,0.30)");
-    vg.append("stop").attr("offset","100%").attr("stop-color", "rgba(0,0,0,0.72)");
+    const applyBubbleAttrs = (
+      sel: d3.Selection<SVGGElement, BubbleNode, any, any>,
+      animated: boolean,
+    ) => {
+      sel.style("cursor", "pointer")
+         .style("filter", d => bubbleGlowFilter(d.delta, maxAbsDelta));
 
-    // ── One <g> per bubble ───────────────────────────────────────────────────
-    const g = svg.selectAll<SVGGElement, BubbleNode>("g.bubble")
-      .data(nodes, d => d.id)
-      .join("g")
-      .attr("class", "bubble")
-      .style("cursor", "pointer")
-      .style("filter", d => bubbleGlowFilter(d.delta, maxAbsDelta));
+      const t = animated ? (s: any) => s.transition().duration(DUR).ease(d3.easeCubicOut) : (s: any) => s;
 
-    // Coloured ring (prominent Stockmap-style border, reacts to buy/sell state)
-    g.append("circle").attr("class", "ring")
-      .attr("r",  d => d.radius + 2.5)
-      .attr("fill", "none")
-      .attr("stroke", d => d.borderColor)
-      .attr("stroke-width", 2.2)
-      .attr("opacity", 0.80);
+      // Ring
+      t(sel.select(".ring"))
+        .attr("r",  (d: BubbleNode) => d.radius + 2.5)
+        .attr("stroke", (d: BubbleNode) => d.borderColor);
+      // Body
+      t(sel.select(".body"))
+        .attr("r",    (d: BubbleNode) => d.radius)
+        .attr("fill", (d: BubbleNode) => `url(#fill-${d.id})`);
+      // Shine, vignette, glass
+      t(sel.select(".shine")).attr("r", (d: BubbleNode) => d.radius);
+      t(sel.select(".vignette")).attr("r", (d: BubbleNode) => d.radius);
+      t(sel.select(".glass-outer")).attr("r", (d: BubbleNode) => d.radius);
+      t(sel.select(".glass")).attr("r", (d: BubbleNode) => d.radius * 0.92)
+        .attr("stroke-dasharray", (d: BubbleNode) => {
+          const circ = 2 * Math.PI * d.radius * 0.92;
+          return `${circ * 0.38} ${circ * 0.62}`;
+        })
+        .attr("stroke-dashoffset", (d: BubbleNode) => {
+          const circ = 2 * Math.PI * d.radius * 0.92;
+          return `${circ * 0.82}`;
+        });
 
-    // Main body — gradient fill, no extra stroke (cleaner, glass handles it)
-    g.append("circle").attr("class", "body")
-      .attr("r",       d => d.radius)
-      .attr("fill",    d => `url(#fill-${d.id})`)
-      .attr("opacity", 0.95);
+      // ── Adaptive text: font-size scales, opacity fades smoothly ─────────
+      // Helper for text elements: applies attrs either directly or via transition
+      const applyText = (
+        textSel: d3.Selection<any, BubbleNode, any, any>,
+        attrs: Record<string, (d: BubbleNode) => string>,
+      ) => {
+        if (animated) {
+          const tr = textSel.transition().duration(DUR);
+          for (const [k, fn] of Object.entries(attrs)) {
+            if (k.startsWith("s:")) tr.style(k.slice(2), fn as any);
+            else tr.attr(k, fn as any);
+          }
+        } else {
+          for (const [k, fn] of Object.entries(attrs)) {
+            if (k.startsWith("s:")) textSel.style(k.slice(2), fn as any);
+            else textSel.attr(k, fn as any);
+          }
+        }
+      };
 
-    // Specular shine overlay
-    g.append("circle").attr("class", "shine")
-      .attr("r", d => d.radius).attr("fill", "url(#shine-shared)")
-      .attr("pointer-events", "none");
+      // % change (top line)
+      const topSel = sel.select<SVGTextElement>(".label-top");
+      applyText(topSel, {
+        "fill":       (d: BubbleNode) => d.priceChange >= 0 ? "#81c784" : "#e57373",
+        "s:font-size":(d: BubbleNode) => `${subFS(d.radius)}px`,
+        "s:opacity":  (d: BubbleNode) => String(subOp(d.radius)),
+        "y":          (d: BubbleNode) => String(d.radius >= 30 ? -lineGap(d.radius) : 0),
+      });
+      topSel.text((d: BubbleNode) =>
+        `${d.priceChange >= 0 ? "▲" : "▼"} ${Math.abs(d.priceChange).toFixed(2)}%`);
 
-    // Vignette (edge darkening)
-    g.append("circle").attr("class", "vignette")
-      .attr("r", d => d.radius).attr("fill", "url(#vignette-shared)")
-      .attr("pointer-events", "none");
+      // Ticker (center)
+      const tkSel = sel.select<SVGTextElement>(".label-ticker");
+      applyText(tkSel, {
+        "s:font-size":(d: BubbleNode) => `${tickerFS(d.radius)}px`,
+        "s:opacity":  (d: BubbleNode) => String(tickerOp(d.radius)),
+        "y":          (d: BubbleNode) => String(d.radius >= 30 ? -subFS(d.radius) * 0.35 : 0),
+      });
 
-    // ── Glassmorphism: dual-ring glass effect ───────────────────────────────
-    // Outer frosted rim: soft wide stroke at the edge — like light
-    // refracting through thick curved glass
-    g.append("circle").attr("class", "glass-outer")
-      .attr("r",              d => d.radius)
-      .attr("fill",           "none")
-      .attr("stroke",         "rgba(255,255,255,0.10)")
-      .attr("stroke-width",   2.5)
-      .attr("pointer-events", "none");
+      // Volume (bottom line)
+      const vlSel = sel.select<SVGTextElement>(".label-vol");
+      applyText(vlSel, {
+        "s:font-size":(d: BubbleNode) => `${subFS(d.radius)}px`,
+        "s:opacity":  (d: BubbleNode) => String(volOp(d.radius)),
+        "y":          (d: BubbleNode) =>
+          String(d.radius >= 30 ? lineGap(d.radius) - subFS(d.radius) * 0.5 : 0),
+      });
+      vlSel.text((d: BubbleNode) => `v/${fmtVol(d.volume)}`);
+    };
 
-    // Inner highlight rim: bright thin stroke slightly inside — like the
-    // specular reflection line on a glass sphere's inner surface
-    g.append("circle").attr("class", "glass")
-      .attr("r",              d => d.radius * 0.92)
-      .attr("fill",           "none")
-      .attr("stroke",         "rgba(255,255,255,0.18)")
-      .attr("stroke-width",   0.7)
-      .attr("stroke-dasharray", d => {
-        // Only draw the top-left arc (≈40% of circumference) to simulate
-        // a directional glass reflection — not a full ring
-        const circ = 2 * Math.PI * d.radius * 0.92;
-        return `${circ * 0.38} ${circ * 0.62}`;
+    // Helper: create the full set of child elements inside a <g>
+    const createBubbleChildren = (enterSel: d3.Selection<SVGGElement, BubbleNode, any, any>) => {
+      enterSel.append("circle").attr("class", "ring")
+        .attr("fill", "none").attr("stroke-width", 2.2).attr("opacity", 0.80);
+      enterSel.append("circle").attr("class", "body").attr("opacity", 0.95);
+      enterSel.append("circle").attr("class", "shine")
+        .attr("fill", "url(#shine-shared)").attr("pointer-events", "none");
+      enterSel.append("circle").attr("class", "vignette")
+        .attr("fill", "url(#vignette-shared)").attr("pointer-events", "none");
+      enterSel.append("circle").attr("class", "glass-outer")
+        .attr("fill", "none").attr("stroke", "rgba(255,255,255,0.10)")
+        .attr("stroke-width", 2.5).attr("pointer-events", "none");
+      enterSel.append("circle").attr("class", "glass")
+        .attr("fill", "none").attr("stroke", "rgba(255,255,255,0.18)")
+        .attr("stroke-width", 0.7).attr("pointer-events", "none");
+      // Text labels
+      enterSel.append("text").attr("class", "label-top")
+        .attr("text-anchor", "middle").attr("dominant-baseline", "middle")
+        .attr("font-family", FONT).attr("font-weight", "600")
+        .style("pointer-events", "none");
+      enterSel.append("text").attr("class", "label-ticker")
+        .attr("text-anchor", "middle").attr("dominant-baseline", "middle")
+        .attr("fill", "rgba(255,255,255,0.97)").attr("font-family", FONT)
+        .attr("font-weight", "800").style("letter-spacing", "0.03em")
+        .style("text-transform", "uppercase").style("pointer-events", "none");
+      enterSel.append("text").attr("class", "label-vol")
+        .attr("text-anchor", "middle").attr("dominant-baseline", "middle")
+        .attr("fill", "rgba(210,220,230,0.70)").attr("font-family", FONT)
+        .attr("font-weight", "400").style("pointer-events", "none");
+      // Set ticker text (doesn't change across timeframes)
+      enterSel.select(".label-ticker").text((d: BubbleNode) => d.id);
+    };
+
+    // ── D3 data join: enter / update / exit ──────────────────────────────
+    const join = svg.selectAll<SVGGElement, BubbleNode>("g.bubble")
+      .data(nodes, d => d.id);
+
+    // EXIT: bubbles that no longer exist — shrink + fade out, then remove
+    join.exit<BubbleNode>()
+      .transition().duration(DUR).ease(d3.easeCubicIn)
+      .style("opacity", "0")
+      .each(function () {
+        d3.select(this).selectAll("circle")
+          .transition().duration(DUR).attr("r", 0);
       })
-      .attr("stroke-dashoffset", d => {
-        // Rotate the dash to start at ~10 o'clock position
-        const circ = 2 * Math.PI * d.radius * 0.92;
-        return `${circ * 0.82}`;
-      })
-      .attr("pointer-events", "none");
+      .remove();
 
-    // ── Helper: compute font sizes + vertical positions for 3-line layout ────
-    // layout: [% change] ← top  |  [TICKER] ← center  |  [v/vol] ← bottom
-    // When radius < 30: only ticker, centered
-    // When radius 30-42: ticker + % change
-    // When radius > 42: all 3 lines
-    const tickerFS  = (r: number) => Math.max(9,  Math.min(r * 0.40, 26));
-    const subFS     = (r: number) => Math.max(7,  Math.min(r * 0.26, 14));
-    const lineGap   = (r: number) => tickerFS(r) * 1.15 + subFS(r) * 0.5;
+    // ENTER: new bubbles — start at radius 0, fully transparent
+    const enter = join.enter()
+      .append("g").attr("class", "bubble").style("opacity", "0");
+    createBubbleChildren(enter);
+    applyBubbleAttrs(enter, false); // set initial values at 0 before animating
+    // Start circles at r=0 for grow-in animation
+    enter.selectAll("circle").attr("r", 0);
+    enter.selectAll("text").style("opacity", "0");
+    // Animate in
+    enter.transition().duration(DUR).ease(d3.easeCubicOut).style("opacity", "1");
+    // After the group is visible, grow circles to final size
+    setTimeout(() => applyBubbleAttrs(enter, true), 20);
 
-    // ── % change — top line ───────────────────────────────────────────────────
-    g.append("text").attr("class", "label-top")
-      .attr("text-anchor", "middle")
-      .attr("dominant-baseline", "middle")
-      .attr("fill", d => d.priceChange >= 0 ? "#81c784" : "#e57373")
-      .attr("font-family", FONT)
-      .attr("font-weight", "600")
-      .style("font-size",      d => `${subFS(d.radius)}px`)
-      .style("pointer-events", "none")
-      .attr("y", d => d.radius >= 30 ? -lineGap(d.radius) : 9999)
-      .style("display",        d => d.radius < 30 ? "none" : "")
-      .text(d => `${d.priceChange >= 0 ? "▲" : "▼"} ${Math.abs(d.priceChange).toFixed(2)}%`);
+    // UPDATE: existing bubbles — smoothly morph to new radius/color
+    const update = join;
+    applyBubbleAttrs(update, true);
+    // Also refresh ticker text in case symbol set changed
+    update.select(".label-ticker").text((d: BubbleNode) => d.id);
 
-    // ── Ticker — center ───────────────────────────────────────────────────────
-    g.append("text").attr("class", "label-ticker")
-      .attr("text-anchor", "middle")
-      .attr("dominant-baseline", "middle")
-      .attr("fill", "rgba(255,255,255,0.97)")
-      .attr("font-family", FONT)
-      .attr("font-weight", "800")
-      .style("font-size",       d => `${tickerFS(d.radius)}px`)
-      .style("letter-spacing",  "0.03em")
-      .style("text-transform",  "uppercase")
-      .style("pointer-events",  "none")
-      .style("display",         d => d.radius < 20 ? "none" : "")
-      // Shift ticker up when showing 3 lines so all 3 fit
-      .attr("y", d => d.radius >= 42 ? -subFS(d.radius) * 0.35 : 0)
-      .text(d => d.id);
+    // Merged selection for hover binding + simulation tick
+    const merged = enter.merge(join);
 
-    // ── Volume — bottom line (shown when radius ≥ 30 px) ─────────────────────
-    g.append("text").attr("class", "label-vol")
-      .attr("text-anchor", "middle")
-      .attr("dominant-baseline", "middle")
-      .attr("fill", "rgba(210,220,230,0.70)")
-      .attr("font-family", FONT)
-      .attr("font-weight", "400")
-      .style("font-size",      d => `${subFS(d.radius)}px`)
-      .style("pointer-events", "none")
-      // text-shadow is applied via the shared CSS rule in defs <style>
-      .attr("y", d => d.radius >= 30 ? lineGap(d.radius) - subFS(d.radius) * 0.5 : 9999)
-      .style("display",        d => d.radius < 30 ? "none" : "")
-      .text(d => `v/${fmtVol(d.volume)}`);
-
-    // ── Hover / click ─────────────────────────────────────────────────────────
-    // On hover: maximise both glow layers so the bubble blazes with colour
+    // ── Hover / click ─────────────────────────────────────────────────────
     const hoverGlow = (d: BubbleNode) =>
       d.delta >= 0
         ? "drop-shadow(0 0 10px rgba(76,175,80,0.95)) drop-shadow(0 0 24px rgba(76,175,80,0.45))"
@@ -473,7 +530,7 @@ export default function BinanceBubbleChart() {
       sel.select(".vignette")   .transition().duration(dur).attr("r", r);
     };
 
-    g.on("mouseenter", function (event, d) {
+    merged.on("mouseenter", function (event, d) {
         d3.select(this).transition().duration(100).style("filter", hoverGlow(d));
         d3.select(this).select(".ring").transition().duration(100).attr("opacity", 1);
         expandAll(d3.select(this), d, 1.09, 100);
@@ -493,22 +550,9 @@ export default function BinanceBubbleChart() {
         window.open(`https://www.binance.com/en/trade/${d.id}_USDT`, "_blank");
       });
 
-    // ── Force simulation — elastic bounce + fluid motion + gravity ──────────
+    // ── Force simulation — elastic bounce + fluid motion + gravity ──────
     const cx = dims.w / 2;
     const cy = dims.h / 2 - 20;
-
-    // 1) Attraction: forceRadial pulls every node toward the centre with
-    //    gentle spring-like behaviour — bubbles drift inward if displaced
-    //    but never clump to a single pixel. forceCenter is kept at minimal
-    //    strength just to prevent drift of the whole cluster.
-    // 2) Collision Elasticity: forceCollide at medium strength (0.78) with
-    //    generous padding (radius + 3) — combined with low velocityDecay
-    //    (0.18) this means kinetic energy is preserved after collision,
-    //    producing visible bounce instead of dead-stop.
-    // 3) Fluid Motion: a custom "brownian" force injects tiny random
-    //    velocity perturbations every tick, simulating molecular jitter.
-    //    alphaDecay is very low (0.005) so the simulation never truly
-    //    "freezes" — bubbles keep gently floating and rearranging.
 
     const brownianForce = () => {
       const jitterStrength = 0.15;
@@ -522,26 +566,21 @@ export default function BinanceBubbleChart() {
       return force as d3.Force<BubbleNode, undefined>;
     };
 
+    // Stop any previous simulation before creating a new one
+    simRef.current?.stop();
+
     const sim = d3.forceSimulation<BubbleNode>(nodes)
-      // Gravity — gentle radial spring pulling everything toward center
-      .force("radial",  d3.forceRadial<BubbleNode>(0, cx, cy).strength(0.035))
-      // Nudge entire cluster centroid so it doesn't wander off-screen
-      .force("center",  d3.forceCenter(cx, cy).strength(0.02))
-      // Mild repulsion so same-size bubbles don't perfectly overlap
-      .force("charge",  d3.forceManyBody<BubbleNode>().strength(-4))
-      // Elastic collision — padding gives breathing room, moderate
-      // strength lets kinetic energy bounce back through velocity
-      .force("collide", d3.forceCollide<BubbleNode>(d => d.radius + 3)
-                           .strength(0.78).iterations(4))
-      // Fluid: tiny random velocity perturbations every tick
+      .force("radial",   d3.forceRadial<BubbleNode>(0, cx, cy).strength(0.035))
+      .force("center",   d3.forceCenter(cx, cy).strength(0.02))
+      .force("charge",   d3.forceManyBody<BubbleNode>().strength(-4))
+      .force("collide",  d3.forceCollide<BubbleNode>(d => d.radius + 3)
+                            .strength(0.78).iterations(4))
       .force("brownian", brownianForce())
-      // Keep simulation alive much longer so it never feels static
       .alphaDecay(0.005)
       .alphaMin(0.008)
-      // Low velocity damping → energy preserved → elastic bounce feel
       .velocityDecay(0.18)
       .on("tick", () => {
-        g.attr("transform", d => `translate(${d.x ?? 0},${d.y ?? 0})`);
+        merged.attr("transform", d => `translate(${d.x ?? 0},${d.y ?? 0})`);
       });
 
     simRef.current = sim;
@@ -625,19 +664,23 @@ export default function BinanceBubbleChart() {
             // Update glow
             grp.style("filter", bubbleGlowFilter(node.delta, newMaxAbs));
 
-            // Update text labels
+            // Update text labels — adaptive opacity + font size
             grp.select(".label-top")
               .attr("fill", node.priceChange >= 0 ? "#81c784" : "#e57373")
-              .attr("y",    node.radius >= 30 ? -lineGap(node.radius) : 9999)
-              .style("display", node.radius < 30 ? "none" : "")
+              .style("font-size", `${subFS(node.radius)}px`)
+              .style("opacity", String(subOp(node.radius)))
+              .attr("y", node.radius >= 30 ? -lineGap(node.radius) : 0)
               .text(`${node.priceChange >= 0 ? "▲" : "▼"} ${Math.abs(node.priceChange).toFixed(2)}%`);
 
             grp.select(".label-ticker")
-              .attr("y", node.radius >= 42 ? -subFS(node.radius) * 0.35 : 0);
+              .style("font-size", `${tickerFS(node.radius)}px`)
+              .style("opacity", String(tickerOp(node.radius)))
+              .attr("y", node.radius >= 30 ? -subFS(node.radius) * 0.35 : 0);
 
             grp.select(".label-vol")
-              .attr("y",    node.radius >= 30 ? lineGap(node.radius) - subFS(node.radius) * 0.5 : 9999)
-              .style("display", node.radius < 30 ? "none" : "")
+              .style("font-size", `${subFS(node.radius)}px`)
+              .style("opacity", String(volOp(node.radius)))
+              .attr("y", node.radius >= 30 ? lineGap(node.radius) - subFS(node.radius) * 0.5 : 0)
               .text(`v/${fmtVol(node.volume)}`);
 
             // ── Volume spike animation ─────────────────────────────────────
@@ -686,7 +729,10 @@ export default function BinanceBubbleChart() {
   useEffect(() => {
     if (!open || !svgRef.current || dims.w === 0) return;
 
-    setLoading(true);
+    // Only show full loading spinner on first open (no existing bubbles).
+    // When switching timeframes, existing bubbles morph smoothly in-place.
+    const hasExistingBubbles = nodesRef.current.length > 0;
+    if (!hasExistingBubbles) setLoading(true);
     setError("");
     setTooltip({ visible: false, x: 0, y: 0, node: null });
 
