@@ -451,14 +451,53 @@ export default function BinanceBubbleChart() {
         window.open(`https://www.binance.com/en/trade/${d.id}_USDT`, "_blank");
       });
 
-    // ── Force simulation — tight Stockmap-style packing ───────────────────────
-    // Higher center strength + minimal collide padding → dense cluster
+    // ── Force simulation — elastic bounce + fluid motion + gravity ──────────
+    const cx = dims.w / 2;
+    const cy = dims.h / 2 - 20;
+
+    // 1) Attraction: forceRadial pulls every node toward the centre with
+    //    gentle spring-like behaviour — bubbles drift inward if displaced
+    //    but never clump to a single pixel. forceCenter is kept at minimal
+    //    strength just to prevent drift of the whole cluster.
+    // 2) Collision Elasticity: forceCollide at medium strength (0.78) with
+    //    generous padding (radius + 3) — combined with low velocityDecay
+    //    (0.18) this means kinetic energy is preserved after collision,
+    //    producing visible bounce instead of dead-stop.
+    // 3) Fluid Motion: a custom "brownian" force injects tiny random
+    //    velocity perturbations every tick, simulating molecular jitter.
+    //    alphaDecay is very low (0.005) so the simulation never truly
+    //    "freezes" — bubbles keep gently floating and rearranging.
+
+    const brownianForce = () => {
+      const jitterStrength = 0.15;
+      const force: d3.Force<BubbleNode, undefined> & { initialize?: (n: BubbleNode[]) => void } = () => {
+        nodes.forEach(n => {
+          n.vx = (n.vx ?? 0) + (Math.random() - 0.5) * jitterStrength;
+          n.vy = (n.vy ?? 0) + (Math.random() - 0.5) * jitterStrength;
+        });
+      };
+      force.initialize = () => {};
+      return force as d3.Force<BubbleNode, undefined>;
+    };
+
     const sim = d3.forceSimulation<BubbleNode>(nodes)
-      .force("center",  d3.forceCenter(dims.w / 2, dims.h / 2 - 25).strength(0.08))
-      .force("charge",  d3.forceManyBody<BubbleNode>().strength(-6))
-      .force("collide", d3.forceCollide<BubbleNode>(d => d.radius + 1.5).strength(0.95).iterations(6))
-      .alphaDecay(0.015)
-      .velocityDecay(0.38)
+      // Gravity — gentle radial spring pulling everything toward center
+      .force("radial",  d3.forceRadial<BubbleNode>(0, cx, cy).strength(0.035))
+      // Nudge entire cluster centroid so it doesn't wander off-screen
+      .force("center",  d3.forceCenter(cx, cy).strength(0.02))
+      // Mild repulsion so same-size bubbles don't perfectly overlap
+      .force("charge",  d3.forceManyBody<BubbleNode>().strength(-4))
+      // Elastic collision — padding gives breathing room, moderate
+      // strength lets kinetic energy bounce back through velocity
+      .force("collide", d3.forceCollide<BubbleNode>(d => d.radius + 3)
+                           .strength(0.78).iterations(4))
+      // Fluid: tiny random velocity perturbations every tick
+      .force("brownian", brownianForce())
+      // Keep simulation alive much longer so it never feels static
+      .alphaDecay(0.005)
+      .alphaMin(0.008)
+      // Low velocity damping → energy preserved → elastic bounce feel
+      .velocityDecay(0.18)
       .on("tick", () => {
         g.attr("transform", d => `translate(${d.x ?? 0},${d.y ?? 0})`);
       });
@@ -581,11 +620,12 @@ export default function BinanceBubbleChart() {
             }
           });
 
-          // Gentle nudge so collision respects updated radii
+          // Re-apply collide with updated radii + give a visible energy kick
+          // so the newly-resized bubbles bounce apart elastically
           simRef.current?.force("collide",
-            d3.forceCollide<BubbleNode>(d => d.radius + 1.5).strength(0.95).iterations(6)
+            d3.forceCollide<BubbleNode>(d => d.radius + 3).strength(0.78).iterations(4)
           );
-          simRef.current?.alpha(0.12).restart();
+          simRef.current?.alpha(0.25).restart();
         }, 800);
       } catch { /* ignore */ }
     };
