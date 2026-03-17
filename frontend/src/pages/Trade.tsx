@@ -631,6 +631,18 @@ export default function Trade() {
   const dotPrice = getPrice("DOTUSD");
 
   const { price: chartPrice } = useChartPrice(chartSymbol);
+  const { price: btcChartPrice } = useChartPrice("BTCUSD");
+  const { price: ethChartPrice } = useChartPrice("ETHUSD");
+  const { price: dotChartPrice } = useChartPrice("DOTUSD");
+
+  const chartPricesBySymbol = useMemo(
+    () => ({
+      BTCUSD: btcChartPrice?.price,
+      ETHUSD: ethChartPrice?.price,
+      DOTUSD: dotChartPrice?.price,
+    }),
+    [btcChartPrice?.price, ethChartPrice?.price, dotChartPrice?.price],
+  );
   const tradingviewSymbol = TRADINGVIEW_SYMBOL_MAP[chartSymbol] ?? chartSymbol;
   const chartLabel = chartPrice ? `${chartSymbol} · Pyth Benchmarks` : undefined;
   const displayPrice = chartPrice ?? getPrice(chartSymbol);
@@ -933,8 +945,7 @@ export default function Trade() {
 
   const renderHistoryEntry = (entry: HistoryEntry) => {
     const entrySymbol = entry.symbol ?? chartSymbol;
-    const entryPriceData = getPrice(entrySymbol);
-    const currentPrice = entryPriceData?.price;
+    const currentPrice = chartPricesBySymbol[entrySymbol];
     const pnlValue = calculatePnL(entry, currentPrice);
     const sizeValue = entry.volume ?? Number(entry.amount) * entry.leverage;
     const closeTimestamp = entry.status === "closed" ? formatTimestamp(entry.timestamp) : "Open";
@@ -1079,16 +1090,16 @@ export default function Trade() {
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">Current Price</span>
-                <span>{formatForSymbol(getPrice(closeConfirmEntry.symbol ?? chartSymbol)?.price ?? null, closeConfirmEntry.symbol ?? chartSymbol)}</span>
+                <span>{formatForSymbol(chartPricesBySymbol[closeConfirmEntry.symbol ?? chartSymbol] ?? null, closeConfirmEntry.symbol ?? chartSymbol)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">Est. PnL</span>
                 <span className={(() => {
-                  const pnl = calculatePnL(closeConfirmEntry, getPrice(closeConfirmEntry.symbol ?? chartSymbol)?.price);
+                  const pnl = calculatePnL(closeConfirmEntry, chartPricesBySymbol[closeConfirmEntry.symbol ?? chartSymbol]);
                   if (pnl == null) return "text-slate-400";
                   return pnl >= 0 ? "text-emerald-400" : "text-rose-400";
                 })()}>
-                  {formatCurrency(calculatePnL(closeConfirmEntry, getPrice(closeConfirmEntry.symbol ?? chartSymbol)?.price))}
+                  {formatCurrency(calculatePnL(closeConfirmEntry, chartPricesBySymbol[closeConfirmEntry.symbol ?? chartSymbol]))}
                 </span>
               </div>
             </div>
