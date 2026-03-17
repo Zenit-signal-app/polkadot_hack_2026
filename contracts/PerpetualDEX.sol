@@ -21,10 +21,15 @@ contract PerpetualDEX is IPerpDEX, IPosition, Ownable, ReentrancyGuard {
     // Holds the reward contract
     IRewardContract private rewardContract;
 
+    // Authorized keeper for TP/SL execution (set by owner)
+    address public keeperAddress;
+
     // Holds the user balances
     mapping(address => uint256) public balances;
     // Holds the user positions per market: user => market (bytes32) => Position
     mapping(address => mapping(bytes32 => Position)) public positions;
+
+    event KeeperRewardClaimed(address indexed keeper, uint256 amount);
 
     constructor(
         address tokenAddress, // Address of the trading token
@@ -143,6 +148,49 @@ contract PerpetualDEX is IPerpDEX, IPosition, Ownable, ReentrancyGuard {
     }
 
     /**
+     * @dev Set the authorized keeper address. Only owner.
+     */
+    function setKeeperAddress(address _keeper) external onlyOwner {
+        keeperAddress = _keeper;
+    }
+
+    /**
+     * @dev Keeper closes a user's position when TP/SL is hit. Only callable by keeperAddress.
+     * @param _user The user whose position to close.
+     * @param _market The market symbol.
+     * @param _amount The margin amount to close.
+     * @return keeperReward Amount of reward to keeper (0 if no reward pool).
+     */
+    function keeperClosePosition(
+        address _user,
+        bytes32 _market,
+        uint256 _amount,
+        uint256 _closePrice
+    ) external nonReentrant returns (uint256 keeperReward) {
+        _closePrice; // Reserved for oracle price; silence unused
+        require(keeperAddress != address(0), "Keeper not set");
+        require(msg.sender == keeperAddress, "Only keeper");
+        require(_amount > 0, "Amount must be greater than 0");
+
+        Position storage position = positions[_user][_market];
+        require(position.amount > 0, "No position open for this market");
+        require(position.amount >= _amount, "Insufficient balance");
+
+        _decreasePositionForUser(_user, _market, _amount, position);
+
+        emit KeeperRewardClaimed(msg.sender, 0);
+        return 0;
+    }
+
+    /**
+     * @dev View: pending keeper reward (0 if no reward pool configured).
+     */
+    function pendingKeeperReward(address _keeper) external pure returns (uint256) {
+        _keeper;
+        return 0;
+    }
+
+    /**
      * @dev Opens a trading position for the caller. The function is private and can only be called within the contract.
      * @param _market The market symbol.
      * @param _amount The amount for the new position.
@@ -215,11 +263,40 @@ contract PerpetualDEX is IPerpDEX, IPosition, Ownable, ReentrancyGuard {
     }
 
     /**
+     * @dev Decreases a user's position (used by keeper). Same logic as _decreasePosition but for arbitrary user.
+     */
+    function _decreasePositionForUser(
+        address _user,
+        bytes32 _market,
+        uint256 _amount,
+        Position storage position
+    ) private {
+        _setRewardForUser(_amount * position.leverage, _user);
+
+        if (position.amount == _amount) {
+            delete positions[_user][_market];
+        } else {
+            position.amount -= _amount;
+        }
+
+        balances[_user] += _amount;
+
+        emit PositionClosed(_user, _market, _amount);
+    }
+
+    /**
      * @dev Sets the reward for the caller based on a given amount. The function is private and can only be called within the contract.
      * @param _amount The leveraged amount of position.
      * Calls the reward contract to update the user's reward based on the passed amount.
      */
     function _setReward(uint256 _amount) private {
         rewardContract.setUserReward(_amount, msg.sender);
+    }
+
+    /**
+     * @dev Sets the reward for a specific user (used when keeper closes on behalf of user).
+     */
+    function _setRewardForUser(uint256 _amount, address _user) private {
+        rewardContract.setUserReward(_amount, _user);
     }
 }

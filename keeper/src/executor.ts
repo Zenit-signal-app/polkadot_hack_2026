@@ -347,7 +347,17 @@ export async function executeOnChainClose(
 ): Promise<TxResult> {
   const tag = "executor:close";
   const marketBytes = symbolToBytes32(order.market);
-  const amount = ethers.parseUnits(order.positionSize, 18);
+
+  // Contract expects margin amount (zUSDC). Use on-chain position if user increased.
+  let amount: bigint;
+  try {
+    const pos = await contract.getCurrentPosition(order.walletAddress, marketBytes);
+    const onChainMargin = pos[0] as bigint;
+    amount = onChainMargin > 0n ? onChainMargin : ethers.parseUnits(order.marginAmount, 18);
+  } catch {
+    amount = ethers.parseUnits(order.marginAmount, 18);
+  }
+
   const closePriceWei = currentPrice
     ? ethers.parseUnits(currentPrice.toFixed(8), 18)
     : 0n;

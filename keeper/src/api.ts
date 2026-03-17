@@ -8,6 +8,7 @@ import {
   updateOrderTpSl,
   updateTpSlByWalletAndMarket,
 } from "./db.js";
+import { syncPositionFromChain } from "./syncPosition.js";
 import { checkCooldown, sendZUSDC } from "./faucet.js";
 import { log } from "./logger.js";
 
@@ -82,6 +83,42 @@ export async function startApi(): Promise<void> {
     });
 
     return updated;
+  });
+
+  // ─── POST /orders/sync — sync on-chain position into DB (for positions opened before keeper) ─
+
+  app.post<{
+    Body: {
+      walletAddress: string;
+      market: string;
+      takeProfitPrice?: number | null;
+      stopLossPrice?: number | null;
+    };
+  }>("/orders/sync", async (req, reply) => {
+    const { walletAddress, market, takeProfitPrice, stopLossPrice } = req.body ?? {};
+
+    if (!walletAddress || !market) {
+      reply.status(400);
+      return { error: "walletAddress and market are required" };
+    }
+
+    const result = await syncPositionFromChain(
+      walletAddress,
+      market,
+      takeProfitPrice ?? null,
+      stopLossPrice ?? null,
+    );
+
+    if (!result) {
+      reply.status(404);
+      return {
+        error: "No on-chain position found for this wallet and market",
+        walletAddress,
+        market,
+      };
+    }
+
+    return result;
   });
 
   // ─── POST /orders/tp-sl — update TP/SL by wallet + market ─────────────────
@@ -199,6 +236,7 @@ export async function startApi(): Promise<void> {
       "GET  /orders",
       "GET  /orders/:id",
       "PUT  /orders/:id/tp-sl",
+      "POST /orders/sync",
       "POST /orders/tp-sl",
       "GET  /faucet/status?wallet=0x…",
       "POST /faucet/zusdc",

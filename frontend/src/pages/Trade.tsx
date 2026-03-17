@@ -2,7 +2,7 @@ import { useAccount, useReadContract, useWriteContract, useWaitForTransactionRec
 import { parseUnits, formatUnits } from "viem";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { CONTRACTS } from "@/config/contracts";
+import { CONTRACTS, KEEPER_URL } from "@/config/contracts";
 import { PERPETUAL_DEX_ABI, symbolToBytes32 } from "@/abis/PerpetualDEX";
 import { ERC20_ABI } from "@/abis/Token";
 import IndicatorPanel from "@/components/IndicatorPanel";
@@ -17,6 +17,47 @@ import { calculatePositionPnL, calculateLiquidationPrice, type PnLResult } from 
 import Decimal from "decimal.js";
 
 const POSITION_TYPE = { Long: 0, Short: 1 } as const;
+
+/** Register TP/SL with keeper. Retries to handle race with PositionOpened. On 404, tries sync first. */
+async function registerTpSlWithKeeper(
+  walletAddress: string,
+  market: PolkadotSymbol,
+  takeProfitPrice: number | null,
+  stopLossPrice: number | null,
+) {
+  if (takeProfitPrice == null && stopLossPrice == null) return;
+  const base = KEEPER_URL.replace(/\/$/, "");
+  const body = JSON.stringify({
+    walletAddress,
+    market,
+    takeProfitPrice,
+    stopLossPrice,
+  });
+  const headers = { "Content-Type": "application/json" };
+  const maxRetries = 4;
+  const delayMs = 2500;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      let res = await fetch(`${base}/orders/tp-sl`, { method: "POST", headers, body });
+      if (res.ok) return;
+      if (res.status === 404) {
+        await fetch(`${base}/orders/sync`, { method: "POST", headers, body });
+        if (attempt < maxRetries - 1) {
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+      }
+      console.warn("[Keeper] TP/SL registration failed:", res.status, await res.text());
+    } catch (err) {
+      if (attempt < maxRetries - 1) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      } else {
+        console.warn("[Keeper] TP/SL registration error:", err);
+      }
+    }
+  }
+}
 
 type PositionData = { amount: bigint; position: number; leverage: number };
 type HistoryEntry = {
@@ -430,19 +471,13 @@ export default function Trade() {
       refetchPositions();
       refetchDexBalance();
 
-      // Register TP/SL with keeper service (non-blocking)
-      if ((previewTakeProfitPrice ?? null) !== null || (previewStopLossPrice ?? null) !== null) {
-        fetch("http://localhost:3100/orders/tp-sl", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            walletAddress: address,
-            market: chartSymbol,
-            takeProfitPrice: previewTakeProfitPrice ?? null,
-            stopLossPrice: previewStopLossPrice ?? null,
-          }),
-        }).catch(() => {});
-      }
+      // Register TP/SL with keeper service (non-blocking, retries on race with PositionOpened)
+      registerTpSlWithKeeper(
+        address!,
+        chartSymbol,
+        previewTakeProfitPrice ?? null,
+        previewStopLossPrice ?? null,
+      ).catch(() => {});
     } catch (e) {
       setPositionAmount(amountStr);
       setTxError(e instanceof Error ? e.message : "Open position failed");
@@ -492,6 +527,16 @@ export default function Trade() {
       setTradeHistory((prev) => [newEntry, ...prev]);
       refetchPositions();
       refetchDexBalance();
+
+      // Register TP/SL with keeper when increasing (update existing order)
+      if ((previewTakeProfitPrice ?? null) !== null || (previewStopLossPrice ?? null) !== null) {
+        registerTpSlWithKeeper(
+          address!,
+          chartSymbol,
+          previewTakeProfitPrice ?? null,
+          previewStopLossPrice ?? null,
+        ).catch(() => {});
+      }
     } catch {
       setPositionAmount(amountStr);
     } finally {
@@ -756,6 +801,22 @@ export default function Trade() {
     return normalizedAmount * leverage;
   }, [closeAmount, positionAmount, leverage, pos?.leverage]);
   const prevHasPosition = useRef<boolean>(hasPosition);
+
+  // Sync open position with keeper when TP/SL set (e.g. position opened before keeper started)
+  const syncedPositionsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!address || !hasPosition) return;
+    const key = `${address.toLowerCase()}:${chartSymbol}`;
+    if (syncedPositionsRef.current.has(key)) return;
+    const openEntry = tradeHistory.find(
+      (e) => e.status === "open" && (e.symbol === chartSymbol || !e.symbol),
+    );
+    const tp = openEntry?.takeProfit ?? null;
+    const sl = openEntry?.stopLoss ?? null;
+    if (tp == null && sl == null) return;
+    syncedPositionsRef.current.add(key);
+    registerTpSlWithKeeper(address, chartSymbol, tp, sl).catch(() => {});
+  }, [address, chartSymbol, hasPosition, tradeHistory]);
   useEffect(() => {
     if (prevHasPosition.current && !hasPosition) {
       setLeverage(2);
