@@ -436,6 +436,13 @@ export default function Trade() {
     if (!acquireTxLock("openPosition")) return;
     setTxError(null);
     const amountStr = positionAmount;
+    const parsed = Number(amountStr);
+    const freeBalance = Number(formatUnits(dexBalance ?? 0n, 18));
+    const available = Math.max(0, Math.min(freeBalance, collateralEquity));
+    if (!Number.isNaN(parsed) && parsed > available) {
+      setTxError(`Insufficient collateral. Available: ${formatZUSDCNumber(available)} zUSDC`);
+      return;
+    }
     const priceSnapshot = displayPrice?.price ?? chartPrice?.price ?? null;
     const entryPriceValue = priceSnapshot ?? 0;
     const parsedAmount = Number(amountStr);
@@ -492,6 +499,13 @@ export default function Trade() {
     if (!acquireTxLock("increasePosition")) return;
     setTxError(null);
     const amountStr = positionAmount;
+    const parsed = Number(amountStr);
+    const freeBalance = Number(formatUnits(dexBalance ?? 0n, 18));
+    const available = Math.max(0, Math.min(freeBalance, collateralEquity));
+    if (!Number.isNaN(parsed) && parsed > available) {
+      setTxError(`Insufficient collateral. Available: ${formatZUSDCNumber(available)} zUSDC`);
+      return;
+    }
     const priceSnapshot = displayPrice?.price ?? chartPrice?.price ?? null;
     const entryPriceValue = priceSnapshot ?? 0;
     const parsedAmount = Number(amountStr);
@@ -551,7 +565,8 @@ export default function Trade() {
     if (!acquireTxLock("closePosition")) return;
     setTxError(null);
     setIsClosingPosition(true);
-    const closePrice = displayPrice?.price ?? chartPrice?.price ?? 0;
+    const marketPrice = chartPricesBySymbol[market] ?? (chartSymbol === market ? displayPrice?.price ?? chartPrice?.price : null) ?? getPrice(market)?.price;
+    const closePrice = marketPrice ?? 0;
     const amountNumber = Number(amountValue);
     const entryPriceValue = entryPrice ?? closePrice;
     const closingLeverage = pos?.leverage ?? leverage;
@@ -598,6 +613,13 @@ export default function Trade() {
             prev.map((p) => (p.id === closeId ? { ...p, status: "confirmed" as const } : p)),
           );
 
+          const prices = chartPricesRef.current;
+          const priceAtConfirm = prices[market] ?? getPriceRef.current(market)?.price;
+          const finalClosePrice =
+            (priceAtConfirm != null && priceAtConfirm > 0)
+              ? priceAtConfirm
+              : (closePrice > 0 ? closePrice : undefined);
+
           setTradeHistory((prev): HistoryEntry[] => {
             let replaced = false;
             const updatedHistory: HistoryEntry[] = prev.map((entry) => {
@@ -609,7 +631,7 @@ export default function Trade() {
                   amount: amountValue,
                   leverage: entry.leverage || closingLeverage,
                   entryPrice: entryPriceValue,
-                  closePrice,
+                  closePrice: finalClosePrice,
                   status: "closed",
                   timestamp: Date.now(),
                   fee: txFee,
@@ -629,7 +651,7 @@ export default function Trade() {
                 amount: amountValue,
                 leverage: closingLeverage,
                 entryPrice: entryPriceValue,
-                closePrice,
+                closePrice: finalClosePrice,
                 status: "closed",
                 timestamp: Date.now(),
                 fee: txFee,
@@ -688,6 +710,10 @@ export default function Trade() {
     }),
     [btcChartPrice?.price, ethChartPrice?.price, dotChartPrice?.price],
   );
+  const chartPricesRef = useRef(chartPricesBySymbol);
+  chartPricesRef.current = chartPricesBySymbol;
+  const getPriceRef = useRef(getPrice);
+  getPriceRef.current = getPrice;
   const tradingviewSymbol = TRADINGVIEW_SYMBOL_MAP[chartSymbol] ?? chartSymbol;
   const chartLabel = chartPrice ? `${chartSymbol} · Pyth Benchmarks` : undefined;
   const displayPrice = chartPrice ?? getPrice(chartSymbol);
@@ -752,32 +778,9 @@ export default function Trade() {
     [setPositionAmount],
   );
 
-  const maxCloseAmount = positionMargin;
   const closeAmountNum = closeAmount.trim() ? Number(closeAmount) : 0;
-  const closeExceedsMax = closeAmount.trim().length > 0 && !Number.isNaN(closeAmountNum) && closeAmountNum > maxCloseAmount && maxCloseAmount > 0;
 
-  const closeWarning = useMemo(() => {
-    if (!closeExceedsMax || !pos) return null;
-    const currentPrice = displayPrice?.price ?? 0;
-    const ep = entryPrice ?? currentPrice;
-    const side = pos.position === 0 ? "Long" : "Short";
-    const lev = pos.leverage;
-    const size = positionMargin * lev;
-    let pnl = 0;
-    if (ep > 0 && currentPrice > 0) {
-      const delta = side === "Long" ? currentPrice - ep : ep - currentPrice;
-      pnl = (delta / ep) * size;
-    }
-    return {
-      side,
-      entryPrice: ep,
-      currentPrice,
-      margin: positionMargin,
-      leverage: lev,
-      size,
-      pnl,
-    };
-  }, [closeExceedsMax, pos, displayPrice?.price, entryPrice, positionMargin]);
+  const positionAmountNum = positionAmount.trim() ? Number(positionAmount) : 0;
 
   const orderSize = useMemo(() => {
     const trimmedClose = closeAmount.trim();
@@ -802,21 +805,25 @@ export default function Trade() {
   }, [closeAmount, positionAmount, leverage, pos?.leverage]);
   const prevHasPosition = useRef<boolean>(hasPosition);
 
-  // Sync open position with keeper when TP/SL set (e.g. position opened before keeper started)
+  // Sync all open positions with keeper when TP/SL set (e.g. opened before keeper started)
   const syncedPositionsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!address || !hasPosition) return;
-    const key = `${address.toLowerCase()}:${chartSymbol}`;
-    if (syncedPositionsRef.current.has(key)) return;
-    const openEntry = tradeHistory.find(
-      (e) => e.status === "open" && (e.symbol === chartSymbol || !e.symbol),
-    );
-    const tp = openEntry?.takeProfit ?? null;
-    const sl = openEntry?.stopLoss ?? null;
-    if (tp == null && sl == null) return;
-    syncedPositionsRef.current.add(key);
-    registerTpSlWithKeeper(address, chartSymbol, tp, sl).catch(() => {});
-  }, [address, chartSymbol, hasPosition, tradeHistory]);
+    if (!address) return;
+    for (const sym of POLKADOT_SYMBOLS) {
+      const pos = positionsBySymbol[sym];
+      if (!pos || pos.amount <= 0n) continue;
+      const key = `${address.toLowerCase()}:${sym}`;
+      if (syncedPositionsRef.current.has(key)) continue;
+      const openEntry = tradeHistory.find(
+        (e) => e.status === "open" && (e.symbol === sym || !e.symbol),
+      );
+      const tp = openEntry?.takeProfit ?? null;
+      const sl = openEntry?.stopLoss ?? null;
+      if (tp == null && sl == null) continue;
+      syncedPositionsRef.current.add(key);
+      registerTpSlWithKeeper(address, sym, tp, sl).catch(() => {});
+    }
+  }, [address, positionsBySymbol, tradeHistory]);
   useEffect(() => {
     if (prevHasPosition.current && !hasPosition) {
       setLeverage(2);
@@ -1003,6 +1010,84 @@ export default function Trade() {
     if (sides.size === 1) return [...sides][0]!;
     return openPositionEntries.length > 0 ? openPositionEntries[openPositionEntries.length - 1]?.type ?? posTypeStr : posTypeStr;
   }, [positionsBySymbol, openPositionEntries, posTypeStr]);
+
+  const totalUnrealizedPnL = useMemo(() => {
+    let sum = 0;
+    for (const entry of openPositionEntries) {
+      const sym = entry.symbol ?? chartSymbol;
+      const price = chartPricesBySymbol[sym];
+      const pnl = calculatePnL(entry, price ?? undefined);
+      if (pnl != null) sum += pnl;
+    }
+    return sum;
+  }, [openPositionEntries, chartPricesBySymbol, chartSymbol]);
+
+  const currentPositionUnrealizedPnL = useMemo(() => {
+    let sum = 0;
+    for (const entry of openPositionEntries) {
+      if (entry.symbol !== chartSymbol && entry.symbol) continue;
+      const price = chartPricesBySymbol[entry.symbol ?? chartSymbol];
+      const pnl = calculatePnL(entry, price ?? undefined);
+      if (pnl != null) sum += pnl;
+    }
+    return sum;
+  }, [openPositionEntries, chartSymbol, chartPricesBySymbol]);
+
+  const maxCloseAmount = Math.max(
+    0,
+    Math.min(positionMargin, positionMargin + currentPositionUnrealizedPnL),
+  );
+  const closeExceedsMax =
+    closeAmount.trim().length > 0 &&
+    !Number.isNaN(closeAmountNum) &&
+    closeAmountNum > maxCloseAmount &&
+    maxCloseAmount > 0;
+
+  const closeWarning = useMemo(() => {
+    if (!closeExceedsMax || !pos) return null;
+    const currentPrice = displayPrice?.price ?? 0;
+    const ep = entryPrice ?? currentPrice;
+    const side = pos.position === 0 ? "Long" : "Short";
+    const lev = pos.leverage;
+    const size = positionMargin * lev;
+    let pnl = 0;
+    if (ep > 0 && currentPrice > 0) {
+      const delta = side === "Long" ? currentPrice - ep : ep - currentPrice;
+      pnl = (delta / ep) * size;
+    }
+    return {
+      side,
+      entryPrice: ep,
+      currentPrice,
+      margin: positionMargin,
+      leverage: lev,
+      size,
+      pnl,
+    };
+  }, [closeExceedsMax, pos, displayPrice?.price, entryPrice, positionMargin]);
+
+  const totalRealizedPnL = useMemo(() => {
+    const closed = tradeHistory.filter((e) => e.status === "closed");
+    let sum = 0;
+    for (const entry of closed) {
+      const pnl = calculatePnL(entry);
+      if (pnl != null) sum += pnl;
+    }
+    return sum;
+  }, [tradeHistory]);
+
+  const collateralEquity = useMemo(() => {
+    const deposited = Number(formatUnits(dexBalance ?? 0n, 18)) + openPositionMargin;
+    return deposited + totalUnrealizedPnL + totalRealizedPnL;
+  }, [dexBalance, openPositionMargin, totalUnrealizedPnL, totalRealizedPnL]);
+
+  const dexBalanceNum = Number(formatUnits(dexBalance ?? 0n, 18));
+  const maxAvailableMargin = Math.max(0, Math.min(dexBalanceNum, collateralEquity));
+  const positionExceedsCollateral =
+    positionAmount.trim().length > 0 &&
+    !Number.isNaN(positionAmountNum) &&
+    positionAmountNum > maxAvailableMargin &&
+    maxAvailableMargin >= 0;
 
   const renderHistoryEntry = (entry: HistoryEntry) => {
     const entrySymbol = entry.symbol ?? chartSymbol;
@@ -1592,8 +1677,10 @@ export default function Trade() {
                       </svg>
                     </span>
                   </div>
-                  <div className="text-white text-sm font-bold truncate leading-tight">{formatZUSDC(dexBalance ?? 0n)}</div>
-                  <div className="mt-1 text-[9px]" style={{ color: "rgba(245,158,11,0.5)" }}>deposited margin</div>
+                  <div className="text-white text-sm font-bold truncate leading-tight">{formatCurrency(collateralEquity)}</div>
+                  <div className="mt-1 text-[9px]" style={{ color: "rgba(245,158,11,0.5)" }}>
+                    deposited + PnL
+                  </div>
                 </div>
 
                 {/* Position */}
@@ -1796,18 +1883,42 @@ export default function Trade() {
                     </div>
                   </div>
                   <div className="mb-4">
-                    <label className="block text-slate-400 text-sm mb-2">Amount (zUSDC)</label>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-slate-400 text-sm">Amount (zUSDC)</label>
+                      <button
+                        type="button"
+                        onClick={() => handlePositionAmountChange(String(maxAvailableMargin))}
+                        className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition"
+                      >
+                        Max: <span className="font-semibold">{formatZUSDCNumber(maxAvailableMargin)}</span>
+                      </button>
+                    </div>
                     <input
                       type="text"
                       value={positionAmount}
                       onChange={(e) => handlePositionAmountChange(e.target.value)}
                       placeholder="0.00"
-                      className="w-full px-4 py-3.5 rounded-xl bg-[#121421] border border-[#363a59] text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50"
+                      className={`w-full px-4 py-3.5 rounded-xl bg-[#121421] border text-white placeholder-slate-500 focus:outline-none transition ${
+                        positionExceedsCollateral
+                          ? "border-rose-500 focus:border-rose-400"
+                          : "border-[#363a59] focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50"
+                      }`}
                     />
+                    {positionExceedsCollateral && (
+                      <p className="mt-1.5 text-xs text-rose-400">
+                        Amount exceeds available collateral ({formatZUSDCNumber(maxAvailableMargin)} zUSDC)
+                      </p>
+                    )}
                   </div>
                   <button
                     onClick={hasPosition ? handleIncreasePosition : handleOpenPosition}
-                    disabled={!positionAmount || isOpenPending || isIncreasePending || isSubmittingPosition}
+                    disabled={
+                      !positionAmount ||
+                      positionExceedsCollateral ||
+                      isOpenPending ||
+                      isIncreasePending ||
+                      isSubmittingPosition
+                    }
                     className={`w-full py-4 rounded-xl font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed ${
                       positionType === "Long" ? "bg-green-500 hover:bg-green-600 text-white" : "bg-red-500 hover:bg-red-600 text-white"
                     }`}

@@ -1,4 +1,8 @@
 import { ethers } from "hardhat";
+import { config as loadEnv } from "dotenv";
+
+loadEnv({ path: "keeper/.env" });
+loadEnv({ path: "frontend/.env" });
 
 /**
  * Set the keeper address on the PerpetualDEX contract.

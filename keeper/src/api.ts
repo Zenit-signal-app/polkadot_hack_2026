@@ -28,6 +28,50 @@ export async function startApi(): Promise<void> {
     uptime: process.uptime(),
   }));
 
+  // ─── GET /diagnostic — TP/SL chain verification ────────────────────────────
+
+  app.get("/diagnostic", async () => {
+    const openOrders = await getOpenOrders();
+    let keeperAddress = "0x0000000000000000000000000000000000000000";
+    try {
+      const { ethers } = await import("ethers");
+      const provider = new ethers.JsonRpcProvider(config.rpcUrl, { chainId: config.chainId });
+      const abi = ["function keeperAddress() view returns (address)"];
+      const contract = new ethers.Contract(config.perpDexAddress as string, abi, provider);
+      keeperAddress = await contract.keeperAddress();
+    } catch (e) {
+      keeperAddress = `error: ${e instanceof Error ? e.message : String(e)}`;
+    }
+    let keeperWalletAddress = "unknown";
+    try {
+      const { ethers } = await import("ethers");
+      const w = new ethers.Wallet(config.keeperPrivateKey as string);
+      keeperWalletAddress = w.address;
+    } catch {
+      keeperWalletAddress = "invalid key";
+    }
+    return {
+      contract: config.perpDexAddress,
+      openOrdersCount: openOrders.length,
+      openOrdersSample: openOrders.slice(0, 3).map((o) => ({
+        id: o.id.slice(0, 8),
+        market: o.market,
+        side: o.side,
+        tp: o.takeProfitPrice,
+        sl: o.stopLossPrice,
+        wallet: o.walletAddress.slice(0, 14) + "...",
+      })),
+      contractKeeperAddress: keeperAddress,
+      keeperWalletAddress,
+      keeperAuthorized: String(keeperAddress).toLowerCase() === keeperWalletAddress.toLowerCase(),
+      hint: keeperAddress === "0x0000000000000000000000000000000000000000"
+        ? "Run: npx hardhat run scripts/setKeeper.ts --network polkadotTestnet"
+        : openOrders.length === 0
+          ? "No open orders. Sync position: POST /orders/sync with walletAddress, market, takeProfitPrice, stopLossPrice"
+          : null,
+    };
+  });
+
   // ─── GET /orders — list all orders ─────────────────────────────────────────
 
   app.get<{
@@ -233,6 +277,7 @@ export async function startApi(): Promise<void> {
     port: config.apiPort,
     endpoints: [
       "GET  /health",
+      "GET  /diagnostic",
       "GET  /orders",
       "GET  /orders/:id",
       "PUT  /orders/:id/tp-sl",
