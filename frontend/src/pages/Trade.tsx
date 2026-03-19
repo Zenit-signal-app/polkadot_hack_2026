@@ -21,6 +21,14 @@ type KeeperOrder = {
   id: string;
   walletAddress: string;
   market: PolkadotSymbol;
+  side?: "Long" | "Short";
+  leverage?: number;
+  closeReasonCode?: number;
+  /** zUSDC strings from keeper DB */
+  marginAmount?: string;
+  positionSize?: string;
+  entryPrice?: number;
+  closePrice?: number | null;
   status: "Open" | "Closed" | "Filled" | "Liquidated" | "Cancelled";
   takeProfitPrice: number | null;
   stopLossPrice: number | null;
@@ -39,6 +47,12 @@ const POSITION_TYPE = { Long: 0, Short: 1 } as const;
 const GAS_LIMIT_BUFFER_PCT = 12n;
 const MIN_GAS_LIMIT = 50_000n;
 const MAX_GAS_LIMIT = 800_000n;
+const TX_RECEIPT_TIMEOUT_MS = 90_000;
+const TX_RECEIPT_POLL_MS = 1_500;
+const TX_RECEIPT_TIMEOUT_MS_LONG = 240_000;
+const TX_RECEIPT_TIMEOUT_MS_OPEN_SHORT = 35_000;
+const TX_RECEIPT_POLL_MS_OPEN_SHORT = 800;
+const MAX_UINT256 = (1n << 256n) - 1n;
 
 async function estimateBufferedGasLimit(
   publicClient: ReturnType<typeof usePublicClient>,
@@ -88,6 +102,12 @@ function getTxErrorMessage(e: unknown, fallback: string): string {
     if (msg.includes("Invalid Transaction")) {
       const details = (e as { details?: string }).details;
       return details ? `Invalid Transaction (chain rejected): ${details}` : "Invalid Transaction (chain rejected).";
+    }
+    if (msg.toLowerCase().includes("already imported") || msg.toLowerCase().includes("already known")) {
+      return "A similar transaction is already pending in mempool. Please wait for confirmation in wallet Activity.";
+    }
+    if (msg.toLowerCase().includes("replaced")) {
+      return "Transaction was replaced in wallet. Please check latest tx in wallet Activity.";
     }
     return msg;
   }
@@ -266,6 +286,66 @@ function calculatePnL(entry: HistoryEntry, currentPrice?: number) {
     : referencePriceDec.sub(entryPriceDec);
   const pnl = delta.div(entryPriceDec).mul(size);
   return Number(pnl.toNumber());
+}
+
+function deriveCloseReason(
+  order: KeeperOrder,
+  existing?: HistoryEntry,
+): HistoryEntry["closeReason"] {
+  if (typeof order.closeReasonCode === "number") {
+    switch (order.closeReasonCode) {
+      case 0:
+        return "Manual close";
+      case 1:
+        return "Take profit hit";
+      case 2:
+        return "Stop loss hit";
+      case 3:
+        return "Liquidation hit";
+      default:
+        return "Manual close";
+    }
+  }
+
+  if (order.status === "Filled") return "Take profit hit";
+  if (order.status === "Liquidated") return "Liquidation hit";
+  if (order.status !== "Closed") return undefined;
+
+  // "Closed" can be either Stop Loss or Manual close.
+  // Classify as SL only when `closePrice` satisfies the same trigger tolerance
+  // as keeper's watcher for SL (avoid mislabeling manual closes near SL).
+  // Keeper uses: SL_TP_TOLERANCE = 1.0002 (0.02% tolerance for price feed lag).
+  const SL_TP_TOLERANCE = 1.0002;
+
+  const sl = order.stopLossPrice;
+  const cp = order.closePrice;
+  const side = order.side ?? existing?.type;
+  const normalizedSide = side === "Long" || side === "Short" ? side : undefined;
+
+  if (
+    sl == null ||
+    cp == null ||
+    !Number.isFinite(sl) ||
+    !Number.isFinite(cp) ||
+    !normalizedSide
+  ) {
+    return "Manual close";
+  }
+
+  if (normalizedSide === "Long") {
+    return cp <= sl * SL_TP_TOLERANCE ? "Stop loss hit" : "Manual close";
+  }
+  // Short
+  return cp >= sl / SL_TP_TOLERANCE ? "Stop loss hit" : "Manual close";
+}
+
+function formatCloseReasonLabel(reason?: HistoryEntry["closeReason"]): string {
+  if (!reason) return "—";
+  if (reason === "Manual close") return "Manual close: 0 (Manual)";
+  if (reason === "Take profit hit") return "CloseReason: 1 (TP)";
+  if (reason === "Stop loss hit") return "CloseReason: 2 (SL)";
+  if (reason === "Liquidation hit") return "CloseReason: 3 (Liquidated)";
+  return reason;
 }
 
 interface PositionPnLDisplayProps {
@@ -470,6 +550,12 @@ export default function Trade() {
     functionName: "balanceOf",
     args: address ? [address] : undefined,
   });
+  const { data: tokenAllowance, refetch: refetchTokenAllowance } = useReadContract({
+    address: CONTRACTS.TOKEN,
+    abi: ERC20_ABI,
+    functionName: "allowance",
+    args: address ? [address, CONTRACTS.DEX] : undefined,
+  });
 
   const { writeContractAsync: approveTokenAsync } = useWriteContract();
   const { writeContractAsync: depositAsync } = useWriteContract();
@@ -497,6 +583,38 @@ export default function Trade() {
   const publicClient = usePublicClient();
 
   const waitOptions = useMemo(() => ({ confirmations: 0 }), []);
+
+  const waitForReceiptWithTimeout = useCallback(
+    async (
+      hash: `0x${string}`,
+      actionLabel: string,
+      timeoutMs: number = TX_RECEIPT_TIMEOUT_MS,
+      pollMs: number = TX_RECEIPT_POLL_MS,
+    ) => {
+      if (!publicClient) throw new Error("No public client");
+      try {
+        return await publicClient.waitForTransactionReceipt({
+          hash,
+          ...waitOptions,
+          timeout: timeoutMs,
+          pollingInterval: pollMs,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.toLowerCase().includes("timeout")) {
+          throw new Error(`${actionLabel} is taking too long to confirm. Tx hash: ${hash}`);
+        }
+        throw err;
+      }
+    },
+    [publicClient, waitOptions],
+  );
+
+  const isReceiptTimeoutError = (e: unknown): boolean => {
+    const msg = e instanceof Error ? e.message : String(e);
+    const m = msg.toLowerCase();
+    return m.includes("timeout") || m.includes("taking too long to confirm");
+  };
 
   const copyText = useCallback(async (text: string) => {
     try {
@@ -559,45 +677,122 @@ export default function Trade() {
     };
   }, [openConfirmedNotice, formatKeeperLogLine]);
 
-  const captureTxFee = useCallback(
-    async (txPromise: Promise<`0x${string}` | undefined>): Promise<number> => {
-      if (!publicClient) throw new Error("No public client");
-      const hash = await txPromise;
-      if (!hash) throw new Error("Transaction was not sent");
-      const receipt = await publicClient.waitForTransactionReceipt({
-        hash: hash as `0x${string}`,
-        ...waitOptions,
-      });
-      if (isTxReverted(receipt.status)) {
-        throw new Error("Transaction failed on-chain");
-      }
-      const gasUsed = receipt.gasUsed ?? 0n;
-      const gasPrice = receipt.effectiveGasPrice ?? 0n;
-      if (gasUsed === 0n || gasPrice === 0n) return 0;
-      return Number(formatUnits(gasUsed * gasPrice, 18));
-    },
-    [publicClient, waitOptions],
-  );
-
   const handleDeposit = async () => {
     if (!depositAmount || !address || !publicClient) return;
     if (!acquireTxLock("deposit")) return;
     setTxError(null);
     setIsDepositing(true);
+    let depositTimeoutPending = false;
     const amount = parseUnits(depositAmount, 18);
     const depositValue = Number(depositAmount);
     try {
-      const gasLimit = await estimateBufferedGasLimitWithFloor(publicClient, {
-        address: CONTRACTS.TOKEN,
-        abi: ERC20_ABI,
-        functionName: "approve",
-        args: [CONTRACTS.DEX, amount],
-        account: address,
-      }, 80_000n, 120_000n);
-      const approveHash = await approveTokenAsync({ address: CONTRACTS.TOKEN, abi: ERC20_ABI, functionName: "approve", args: [CONTRACTS.DEX, amount], gas: gasLimit });
-      if (approveHash) {
-        const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash, ...waitOptions });
-        if (isTxReverted(approveReceipt.status)) throw new Error("Approve failed on-chain");
+      const allowanceRes = tokenAllowance === undefined ? await refetchTokenAllowance() : null;
+      const allowanceNow = (allowanceRes?.data ?? tokenAllowance ?? 0n) as bigint;
+      if (allowanceNow < amount) {
+        // Approve max once to avoid frequent re-approve race/reject when users deposit repeatedly.
+        const gasLimit = await estimateBufferedGasLimitWithFloor(publicClient, {
+          address: CONTRACTS.TOKEN,
+          abi: ERC20_ABI,
+          functionName: "approve",
+          args: [CONTRACTS.DEX, MAX_UINT256],
+          account: address,
+        }, 80_000n, 120_000n);
+        const approveHash = await approveTokenAsync({
+          address: CONTRACTS.TOKEN,
+          abi: ERC20_ABI,
+          functionName: "approve",
+          args: [CONTRACTS.DEX, MAX_UINT256],
+          gas: gasLimit,
+        });
+        if (approveHash) {
+          try {
+            const approveReceipt = await waitForReceiptWithTimeout(
+              approveHash,
+              "Approve transaction",
+              TX_RECEIPT_TIMEOUT_MS_OPEN_SHORT,
+              TX_RECEIPT_POLL_MS_OPEN_SHORT,
+            );
+            if (isTxReverted(approveReceipt.status)) throw new Error("Approve failed on-chain");
+            refetchTokenAllowance();
+          } catch (e) {
+            if (!isReceiptTimeoutError(e)) throw e;
+
+            // Soft-timeout approve: wait longer in background, then submit deposit.
+            depositTimeoutPending = true;
+            const longApproveHash = approveHash as `0x${string}`;
+            publicClient
+              .waitForTransactionReceipt({
+                hash: longApproveHash,
+                ...waitOptions,
+                timeout: TX_RECEIPT_TIMEOUT_MS_LONG,
+                pollingInterval: TX_RECEIPT_POLL_MS,
+              })
+              .then(async (bgApproveReceipt) => {
+                if (!bgApproveReceipt) return;
+                if (isTxReverted(bgApproveReceipt.status)) {
+                  setTxError("Approve failed on-chain");
+                  setIsDepositing(false);
+                  releaseTxLock("deposit");
+                  return;
+                }
+
+                refetchTokenAllowance();
+                // Now allowance should be set; submit deposit in background.
+                const depositGasLimit = await estimateBufferedGasLimitWithFloor(publicClient, {
+                  address: CONTRACTS.DEX,
+                  abi: PERPETUAL_DEX_ABI,
+                  functionName: "deposit",
+                  args: [amount],
+                  account: address,
+                }, 220_000n, 300_000n);
+
+                const hash = await depositAsync({
+                  address: CONTRACTS.DEX,
+                  abi: PERPETUAL_DEX_ABI,
+                  functionName: "deposit",
+                  args: [amount],
+                  gas: depositGasLimit,
+                });
+                if (!hash) {
+                  setTxError("Deposit transaction was not sent");
+                  setIsDepositing(false);
+                  releaseTxLock("deposit");
+                  return;
+                }
+
+                const longDepositReceipt = await publicClient.waitForTransactionReceipt({
+                  hash: hash as `0x${string}`,
+                  ...waitOptions,
+                  timeout: TX_RECEIPT_TIMEOUT_MS_LONG,
+                  pollingInterval: TX_RECEIPT_POLL_MS,
+                });
+
+                if (isTxReverted(longDepositReceipt.status)) {
+                  setTxError("Deposit failed on-chain");
+                  setIsDepositing(false);
+                  releaseTxLock("deposit");
+                  return;
+                }
+
+                setDepositAmount("");
+                if (!Number.isNaN(depositValue)) {
+                  setDepositHistory((prev) => [
+                    { id: crypto.randomUUID?.() ?? `deposit-${Date.now()}`, amount: depositValue, timestamp: Date.now() },
+                    ...prev,
+                  ]);
+                }
+                refetchDexBalance();
+                setIsDepositing(false);
+                releaseTxLock("deposit");
+              })
+              .catch(() => {
+                // Still pending; keeper sync / user refresh will reconcile.
+                setIsDepositing(false);
+                releaseTxLock("deposit");
+              });
+            return;
+          }
+        }
       }
       const depositGasLimit = await estimateBufferedGasLimitWithFloor(publicClient, {
         address: CONTRACTS.DEX,
@@ -608,7 +803,58 @@ export default function Trade() {
       }, 220_000n, 300_000n);
       const hash = await depositAsync({ address: CONTRACTS.DEX, abi: PERPETUAL_DEX_ABI, functionName: "deposit", args: [amount], gas: depositGasLimit });
       if (!hash) throw new Error("Deposit transaction was not sent");
-      const receipt = await publicClient.waitForTransactionReceipt({ hash, ...waitOptions });
+      let receipt: any;
+      try {
+          receipt = await waitForReceiptWithTimeout(
+            hash,
+            "Deposit transaction",
+            TX_RECEIPT_TIMEOUT_MS,
+            TX_RECEIPT_POLL_MS,
+          );
+      } catch (e) {
+        if (!isReceiptTimeoutError(e)) throw e;
+
+        // Soft-timeout: keep UI from hard-failing; wait longer in background.
+        const longHash = hash as `0x${string}`;
+        depositTimeoutPending = true;
+        publicClient
+          .waitForTransactionReceipt({
+            hash: longHash,
+            ...waitOptions,
+            timeout: TX_RECEIPT_TIMEOUT_MS_LONG,
+            pollingInterval: TX_RECEIPT_POLL_MS,
+          })
+          .then((bgReceipt) => {
+            if (!bgReceipt) return;
+            if (isTxReverted(bgReceipt.status)) {
+              setTxError("Deposit failed on-chain");
+              setIsDepositing(false);
+              releaseTxLock("deposit");
+              return;
+            }
+            setDepositAmount("");
+            if (!Number.isNaN(depositValue)) {
+              setDepositHistory((prev) => [
+                {
+                  id: crypto.randomUUID?.() ?? `deposit-${Date.now()}`,
+                  amount: depositValue,
+                  timestamp: Date.now(),
+                },
+                ...prev,
+              ]);
+            }
+            refetchDexBalance();
+            setIsDepositing(false);
+            releaseTxLock("deposit");
+          })
+          .catch(() => {
+            // Still pending; keeper sync / user refresh will reconcile.
+            setIsDepositing(false);
+            releaseTxLock("deposit");
+          });
+        return;
+      }
+
       if (isTxReverted(receipt.status)) throw new Error("Deposit failed on-chain");
       setDepositAmount("");
       if (!Number.isNaN(depositValue)) {
@@ -621,8 +867,10 @@ export default function Trade() {
     } catch (e) {
       setTxError(getTxErrorMessage(e, "Deposit failed"));
     } finally {
-      setIsDepositing(false);
-      releaseTxLock("deposit");
+      if (!depositTimeoutPending) {
+        setIsDepositing(false);
+        releaseTxLock("deposit");
+      }
     }
   };
 
@@ -672,6 +920,7 @@ export default function Trade() {
     const available = Math.max(0, Math.min(freeBalance, collateralEquity));
     if (!Number.isNaN(parsed) && parsed > available) {
       setTxError(`Insufficient collateral. Available: ${formatZUSDCNumber(available)} zUSDC`);
+      releaseTxLock("openPosition");
       return;
     }
     const priceSnapshot = displayPrice?.price ?? chartPrice?.price ?? null;
@@ -679,6 +928,7 @@ export default function Trade() {
     const parsedAmount = Number(amountStr);
     const volume = parsedAmount * leverage;
     setIsSubmittingPosition(true);
+    let openReceiptTimeoutPending = false;
     try {
       const openArgs = [symbolToBytes32(chartSymbol), parseUnits(amountStr, 18), POSITION_TYPE[positionType], leverage] as const;
       const gasLimit = await estimateBufferedGasLimitWithFloor(publicClient, {
@@ -696,58 +946,103 @@ export default function Trade() {
         gas: gasLimit,
       });
       if (!txHash) throw new Error("Transaction was not sent");
-      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash, ...waitOptions });
-      if (isTxReverted(receipt.status)) throw new Error("Open position reverted on-chain");
-      const gasUsed = receipt.gasUsed ?? 0n;
-      const gasPrice = receipt.effectiveGasPrice ?? 0n;
-      const txFee = gasUsed === 0n || gasPrice === 0n ? 0 : Number(formatUnits(gasUsed * gasPrice, 18));
-      if (priceSnapshot) setEntryPrice(priceSnapshot);
-      const newEntry: HistoryEntry = {
-        id: crypto.randomUUID?.() ?? `${Date.now()}-open`,
-        symbol: chartSymbol,
-        action: "open",
-        type: positionType,
-        amount: amountStr,
-        leverage,
-        entryPrice: entryPriceValue,
-        status: "open",
-        timestamp: Date.now(),
-        openedAt: Date.now(),
-        openTxHash: txHash,
-        fee: txFee,
-        takeProfit: previewTakeProfitPrice ?? null,
-        stopLoss: previewStopLossPrice ?? null,
-        volume,
+      const applyOpenConfirmed = (confirmedReceipt: any) => {
+        if (isTxReverted(confirmedReceipt.status)) throw new Error("Open position reverted on-chain");
+        const gasUsed: bigint =
+          typeof confirmedReceipt.gasUsed === "bigint" ? confirmedReceipt.gasUsed : BigInt(confirmedReceipt.gasUsed ?? 0);
+        const gasPrice: bigint =
+          typeof confirmedReceipt.effectiveGasPrice === "bigint"
+            ? confirmedReceipt.effectiveGasPrice
+            : BigInt(confirmedReceipt.effectiveGasPrice ?? 0);
+        const txFee = gasUsed === 0n || gasPrice === 0n ? 0 : Number(formatUnits(gasUsed * gasPrice, 18));
+
+        if (priceSnapshot) setEntryPrice(priceSnapshot);
+        const newEntry: HistoryEntry = {
+          id: crypto.randomUUID?.() ?? `${Date.now()}-open`,
+          symbol: chartSymbol,
+          action: "open",
+          type: positionType,
+          amount: amountStr,
+          leverage,
+          entryPrice: entryPriceValue,
+          status: "open",
+          timestamp: Date.now(),
+          openedAt: Date.now(),
+          openTxHash: txHash,
+          fee: txFee,
+          takeProfit: previewTakeProfitPrice ?? null,
+          stopLoss: previewStopLossPrice ?? null,
+          volume,
+        };
+        setTradeHistory((prev) => [newEntry, ...prev]);
+        refetchPositions();
+        refetchDexBalance();
+
+        // UI notification: confirmed openPosition + copyable info
+        setOpenConfirmedNotice({
+          createdAt: Date.now(),
+          walletAddress: address!,
+          market: chartSymbol,
+          side: positionType,
+          margin: amountStr,
+          leverage,
+          entryPrice: entryPriceValue,
+          takeProfit: previewTakeProfitPrice ?? null,
+          stopLoss: previewStopLossPrice ?? null,
+          txHash,
+        });
+
+        // Register TP/SL with keeper + persist for sync after refresh
+        const tp = previewTakeProfitPrice ?? null;
+        const sl = previewStopLossPrice ?? null;
+        saveTpSlToStorage(address!, chartSymbol, tp, sl);
+        registerTpSlWithKeeper(address!, chartSymbol, tp, sl).catch(() => {});
       };
-      setTradeHistory((prev) => [newEntry, ...prev]);
-      refetchPositions();
-      refetchDexBalance();
 
-      // UI notification: confirmed openPosition + copyable info
-      setOpenConfirmedNotice({
-        createdAt: Date.now(),
-        walletAddress: address!,
-        market: chartSymbol,
-        side: positionType,
-        margin: amountStr,
-        leverage,
-        entryPrice: entryPriceValue,
-        takeProfit: previewTakeProfitPrice ?? null,
-        stopLoss: previewStopLossPrice ?? null,
-        txHash,
-      });
+      let receipt: any;
+      try {
+        receipt = await waitForReceiptWithTimeout(
+          txHash,
+          "Open position transaction",
+          TX_RECEIPT_TIMEOUT_MS_OPEN_SHORT,
+          TX_RECEIPT_POLL_MS_OPEN_SHORT,
+        );
+        applyOpenConfirmed(receipt);
+      } catch (e) {
+        if (!isReceiptTimeoutError(e)) throw e;
 
-      // Register TP/SL with keeper + persist for sync after refresh
-      const tp = previewTakeProfitPrice ?? null;
-      const sl = previewStopLossPrice ?? null;
-      saveTpSlToStorage(address!, chartSymbol, tp, sl);
-      registerTpSlWithKeeper(address!, chartSymbol, tp, sl).catch(() => {});
+        const longHash = txHash as `0x${string}`;
+        openReceiptTimeoutPending = true;
+        publicClient
+          .waitForTransactionReceipt({
+            hash: longHash,
+            ...waitOptions,
+            timeout: TX_RECEIPT_TIMEOUT_MS_LONG,
+            pollingInterval: TX_RECEIPT_POLL_MS,
+          })
+          .then((bgReceipt) => {
+            if (!bgReceipt) return;
+            try {
+              applyOpenConfirmed(bgReceipt);
+              setIsSubmittingPosition(false);
+              releaseTxLock("openPosition");
+            } catch (err) {
+              setTxError(err instanceof Error ? err.message : String(err));
+              setIsSubmittingPosition(false);
+              releaseTxLock("openPosition");
+            }
+          })
+          .catch(() => {});
+        return;
+      }
     } catch (e) {
       setPositionAmount(amountStr);
       setTxError(getTxErrorMessage(e, "Open position failed"));
     } finally {
-      setIsSubmittingPosition(false);
-      releaseTxLock("openPosition");
+      if (!openReceiptTimeoutPending) {
+        setIsSubmittingPosition(false);
+        releaseTxLock("openPosition");
+      }
     }
   };
 
@@ -756,11 +1051,14 @@ export default function Trade() {
     if (!acquireTxLock("increasePosition")) return;
     setTxError(null);
     const amountStr = positionAmount;
+    const client = publicClient;
+    if (!client) return;
     const parsed = Number(amountStr);
     const freeBalance = Number(formatUnits(dexBalance ?? 0n, 18));
     const available = Math.max(0, Math.min(freeBalance, collateralEquity));
     if (!Number.isNaN(parsed) && parsed > available) {
       setTxError(`Insufficient collateral. Available: ${formatZUSDCNumber(available)} zUSDC`);
+      releaseTxLock("increasePosition");
       return;
     }
     const priceSnapshot = displayPrice?.price ?? chartPrice?.price ?? null;
@@ -768,6 +1066,7 @@ export default function Trade() {
     const parsedAmount = Number(amountStr);
     const volume = parsedAmount * leverage;
     setIsSubmittingPosition(true);
+    let increaseReceiptTimeoutPending = false;
     try {
       const incArgs = [symbolToBytes32(chartSymbol), parseUnits(amountStr, 18)] as const;
       const gasLimit = await estimateBufferedGasLimitWithFloor(publicClient, {
@@ -777,50 +1076,104 @@ export default function Trade() {
         args: incArgs,
         account: address,
       }, 200_000n, 320_000n);
-      const txFee = await captureTxFee(
-        increasePosAsync({
-          address: CONTRACTS.DEX,
-          abi: PERPETUAL_DEX_ABI,
-          functionName: "increasePosition",
-          args: incArgs,
-          gas: gasLimit,
-        }),
-      );
-      setPositionAmount("");
-      if (priceSnapshot) setEntryPrice(priceSnapshot);
-      const newEntry: HistoryEntry = {
-        id: crypto.randomUUID?.() ?? `${Date.now()}-increase`,
-        symbol: chartSymbol,
-        action: "increase",
-        type: positionType,
-        amount: amountStr,
-        leverage,
-        entryPrice: entryPriceValue,
-        status: "open",
-        timestamp: Date.now(),
-        openedAt: Date.now(),
-        fee: txFee,
-        takeProfit: previewTakeProfitPrice ?? null,
-        stopLoss: previewStopLossPrice ?? null,
-        volume,
-      };
-      setTradeHistory((prev) => [newEntry, ...prev]);
-      refetchPositions();
-      refetchDexBalance();
+      const txHash = await increasePosAsync({
+        address: CONTRACTS.DEX,
+        abi: PERPETUAL_DEX_ABI,
+        functionName: "increasePosition",
+        args: incArgs,
+        gas: gasLimit,
+      });
+      if (!txHash) throw new Error("Transaction was not sent");
 
-      // Register TP/SL with keeper when increasing + persist
-      const tp = previewTakeProfitPrice ?? null;
-      const sl = previewStopLossPrice ?? null;
-      if (tp !== null || sl !== null) {
-        saveTpSlToStorage(address!, chartSymbol, tp, sl);
-        registerTpSlWithKeeper(address!, chartSymbol, tp, sl).catch(() => {});
+      const applyIncreaseConfirmed = (confirmedReceipt: any) => {
+        if (isTxReverted(confirmedReceipt.status)) throw new Error("Increase position reverted on-chain");
+
+        const gasUsed: bigint =
+          typeof confirmedReceipt.gasUsed === "bigint" ? confirmedReceipt.gasUsed : BigInt(confirmedReceipt.gasUsed ?? 0);
+        const gasPrice: bigint =
+          typeof confirmedReceipt.effectiveGasPrice === "bigint"
+            ? confirmedReceipt.effectiveGasPrice
+            : BigInt(confirmedReceipt.effectiveGasPrice ?? 0);
+        const txFee = gasUsed === 0n || gasPrice === 0n ? 0 : Number(formatUnits(gasUsed * gasPrice, 18));
+
+        setPositionAmount("");
+        if (priceSnapshot) setEntryPrice(priceSnapshot);
+
+        const newEntry: HistoryEntry = {
+          id: crypto.randomUUID?.() ?? `${Date.now()}-increase`,
+          symbol: chartSymbol,
+          action: "increase",
+          type: positionType,
+          amount: amountStr,
+          leverage,
+          entryPrice: entryPriceValue,
+          status: "open",
+          timestamp: Date.now(),
+          openedAt: Date.now(),
+          fee: txFee,
+          takeProfit: previewTakeProfitPrice ?? null,
+          stopLoss: previewStopLossPrice ?? null,
+          volume,
+        };
+
+        setTradeHistory((prev) => [newEntry, ...prev]);
+        refetchPositions();
+        refetchDexBalance();
+
+        // Register TP/SL with keeper when increasing + persist
+        const tp = previewTakeProfitPrice ?? null;
+        const sl = previewStopLossPrice ?? null;
+        if (tp !== null || sl !== null) {
+          saveTpSlToStorage(address!, chartSymbol, tp, sl);
+          registerTpSlWithKeeper(address!, chartSymbol, tp, sl).catch(() => {});
+        }
+      };
+
+      let receipt: any;
+      try {
+        receipt = await waitForReceiptWithTimeout(
+          txHash,
+          "Increase position transaction",
+          TX_RECEIPT_TIMEOUT_MS_OPEN_SHORT,
+          TX_RECEIPT_POLL_MS_OPEN_SHORT,
+        );
+        applyIncreaseConfirmed(receipt);
+      } catch (e) {
+        if (!isReceiptTimeoutError(e)) throw e;
+
+        const longHash = txHash as `0x${string}`;
+        increaseReceiptTimeoutPending = true;
+        client
+          .waitForTransactionReceipt({
+            hash: longHash,
+            ...waitOptions,
+            timeout: TX_RECEIPT_TIMEOUT_MS_LONG,
+            pollingInterval: TX_RECEIPT_POLL_MS,
+          })
+          .then((bgReceipt) => {
+            if (!bgReceipt) return;
+            try {
+              applyIncreaseConfirmed(bgReceipt);
+              setIsSubmittingPosition(false);
+              releaseTxLock("increasePosition");
+            } catch (err) {
+              setTxError(err instanceof Error ? err.message : String(err));
+              setPositionAmount(amountStr);
+              setIsSubmittingPosition(false);
+              releaseTxLock("increasePosition");
+            }
+          })
+          .catch(() => {});
+        return;
       }
     } catch (e) {
       setPositionAmount(amountStr);
       setTxError(getTxErrorMessage(e, "Increase position failed"));
     } finally {
-      setIsSubmittingPosition(false);
-      releaseTxLock("increasePosition");
+      if (!increaseReceiptTimeoutPending) {
+        setIsSubmittingPosition(false);
+        releaseTxLock("increasePosition");
+      }
     }
   };
 
@@ -868,61 +1221,67 @@ export default function Trade() {
         { id: closeId, txHash, symbol: market, amount: amountValue, type: currentPosType, status: "pending", timestamp: Date.now() },
       ]);
 
-      publicClient
-        .waitForTransactionReceipt({ hash: txHash as `0x${string}`, ...waitOptions })
-        .then((receipt) => {
-          if (isTxReverted(receipt.status)) {
-            setPendingCloses((prev) =>
-              prev.map((p) => (p.id === closeId ? { ...p, status: "failed" as const } : p)),
-            );
-            setTxError("Close position transaction reverted on-chain");
-            return;
-          }
-          const gasUsed = receipt.gasUsed ?? 0n;
-          const gasPrice = receipt.effectiveGasPrice ?? 0n;
-          const txFee = gasUsed > 0n && gasPrice > 0n ? Number(formatUnits(gasUsed * gasPrice, 18)) : 0;
-
+      const applyCloseReceipt = (receipt: any) => {
+        if (isTxReverted(receipt.status)) {
           setPendingCloses((prev) =>
-            prev.map((p) => (p.id === closeId ? { ...p, status: "confirmed" as const } : p)),
+            prev.map((p) => (p.id === closeId ? { ...p, status: "failed" as const } : p)),
           );
+          setTxError("Close position transaction reverted on-chain");
+          return;
+        }
 
-          const prices = chartPricesRef.current;
-          const priceAtConfirm = prices[market] ?? getPriceRef.current(market)?.price;
-          const finalClosePrice =
-            (priceAtConfirm != null && priceAtConfirm > 0)
-              ? priceAtConfirm
-              : (closePrice > 0 ? closePrice : undefined);
+        const gasUsed: bigint =
+          typeof receipt.gasUsed === "bigint" ? receipt.gasUsed : BigInt(receipt.gasUsed ?? 0);
+        const gasPrice: bigint =
+          typeof receipt.effectiveGasPrice === "bigint"
+            ? receipt.effectiveGasPrice
+            : BigInt(receipt.effectiveGasPrice ?? 0);
+        const txFee = gasUsed > 0n && gasPrice > 0n ? Number(formatUnits(gasUsed * gasPrice, 18)) : 0;
 
-          setTradeHistory((prev): HistoryEntry[] => {
-            let replaced = false;
-            const updatedHistory: HistoryEntry[] = prev.map((entry) => {
-              if (!replaced && entry.status === "open" && (entry.symbol === market || !entry.symbol)) {
-                replaced = true;
-                const now = Date.now();
-                return {
-                  ...entry,
-                  action: "close",
-                  amount: amountValue,
-                  leverage: entry.leverage || closingLeverage,
-                  entryPrice: entryPriceValue,
-                  closePrice: finalClosePrice,
-                  status: "closed",
-                  timestamp: now,
-                  openedAt: entry.openedAt ?? entry.timestamp,
-                  closedAt: now,
-                  closeTxHash: txHash as `0x${string}`,
-                  closeReason: "Manual close",
-                  fee: txFee,
-                  takeProfit: previewTakeProfitPrice ?? null,
-                  stopLoss: previewStopLossPrice ?? null,
-                  volume,
-                };
-              }
-              return entry;
-            });
-            if (!replaced) {
+        setPendingCloses((prev) =>
+          prev.map((p) => (p.id === closeId ? { ...p, status: "confirmed" as const } : p)),
+        );
+
+        const prices = chartPricesRef.current;
+        const priceAtConfirm = prices[market] ?? getPriceRef.current(market)?.price;
+        const finalClosePrice =
+          priceAtConfirm != null && priceAtConfirm > 0
+            ? priceAtConfirm
+            : closePrice > 0
+              ? closePrice
+              : undefined;
+
+        setTradeHistory((prev): HistoryEntry[] => {
+          let replaced = false;
+          const updatedHistory: HistoryEntry[] = prev.map((entry) => {
+            if (!replaced && entry.status === "open" && (entry.symbol === market || !entry.symbol)) {
+              replaced = true;
               const now = Date.now();
-              return [{
+              return {
+                ...entry,
+                action: "close",
+                amount: amountValue,
+                leverage: entry.leverage || closingLeverage,
+                entryPrice: entryPriceValue,
+                closePrice: finalClosePrice,
+                status: "closed",
+                timestamp: now,
+                openedAt: entry.openedAt ?? entry.timestamp,
+                closedAt: now,
+                closeTxHash: txHash as `0x${string}`,
+                closeReason: "Manual close",
+                fee: txFee,
+                takeProfit: previewTakeProfitPrice ?? null,
+                stopLoss: previewStopLossPrice ?? null,
+                volume,
+              };
+            }
+            return entry;
+          });
+          if (!replaced) {
+            const now = Date.now();
+            return [
+              {
                 id: closeId,
                 symbol: market,
                 action: "close",
@@ -941,21 +1300,48 @@ export default function Trade() {
                 takeProfit: previewTakeProfitPrice ?? null,
                 stopLoss: previewStopLossPrice ?? null,
                 volume,
-              }, ...prev];
-            }
-            return updatedHistory;
-          });
-
-          saveTpSlToStorage(address!, market, null, null);
-          refetchPositions();
-          refetchDexBalance();
-        })
-        .catch(() => {
-          setPendingCloses((prev) =>
-            prev.map((p) => (p.id === closeId ? { ...p, status: "failed" as const } : p)),
-          );
-          setTxError("Failed to confirm close position transaction");
+              },
+              ...prev,
+            ];
+          }
+          return updatedHistory;
         });
+
+        saveTpSlToStorage(address!, market, null, null);
+        refetchPositions();
+        refetchDexBalance();
+      };
+
+      try {
+        const receipt = await waitForReceiptWithTimeout(txHash as `0x${string}`, "Close position transaction");
+        applyCloseReceipt(receipt);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const isTimeout = msg.toLowerCase().includes("timeout") || msg.toLowerCase().includes("taking too long");
+
+        if (isTimeout) {
+          // Keep pending: the tx may still confirm after our UI timeout.
+          // Background wait will eventually reconcile the history via keeper sync anyway.
+          publicClient
+            .waitForTransactionReceipt({
+              hash: txHash as `0x${string}`,
+              ...waitOptions,
+              timeout: TX_RECEIPT_TIMEOUT_MS_LONG,
+              pollingInterval: TX_RECEIPT_POLL_MS,
+            })
+            .then(applyCloseReceipt)
+            .catch(() => {
+              // Still no receipt; leave as pending.
+            });
+          return;
+        }
+
+        // Non-timeout failures: mark failed.
+        setPendingCloses((prev) =>
+          prev.map((p) => (p.id === closeId ? { ...p, status: "failed" as const } : p)),
+        );
+        setTxError("Failed to confirm close position transaction");
+      }
     } catch (e) {
       if (!amountOverride) setCloseAmount(amountValue);
       setTxError(getTxErrorMessage(e, "Close position failed"));
@@ -1241,8 +1627,10 @@ export default function Trade() {
       let changed = false;
       const next = prev.map((e) => {
         if (e.status !== "closed") return e;
-        if (e.closeReason) return e;
-        if (e.action === "close") return { ...e, closeReason: "Manual close" as const };
+        // Only skip when we already have a non-manual classification.
+        // If it's "Manual close", we still want keeper-derived TP/SL/Liq to override it.
+        if (e.closeReason && e.closeReason !== "Manual close") return e;
+        if (e.action === "close" && !e.closeReason) return { ...e, closeReason: "Manual close" as const };
 
         const match =
           (e.openTxHash
@@ -1255,18 +1643,24 @@ export default function Trade() {
 
         if (!match) return e;
 
-        const reason =
-          match.status === "Filled"
-            ? ("Take profit hit" as const)
-            : match.status === "Liquidated"
-              ? ("Liquidation hit" as const)
-              : match.status === "Closed"
-                ? ("Stop loss hit" as const)
-                : null;
+        const effectiveExisting: HistoryEntry = match.side
+          ? { ...e, type: match.side as HistoryEntry["type"] }
+          : e;
+
+        const reason = deriveCloseReason(match, effectiveExisting);
 
         if (!reason) return e;
+        // Always allow keeper-derived classification to override stale local "Manual close".
         changed = true;
-        return { ...e, closeReason: reason };
+        return {
+          ...e,
+          type: (match.side ?? e.type) as HistoryEntry["type"],
+          entryPrice: (match.entryPrice ?? e.entryPrice) as number,
+          closePrice: (match.closePrice ?? e.closePrice) as number | undefined,
+          leverage: match.leverage ?? e.leverage,
+          amount: (match.marginAmount ?? e.amount) as string,
+          closeReason: reason,
+        };
       });
       return changed ? next : prev;
     });
@@ -1314,13 +1708,6 @@ export default function Trade() {
     if (keeperOrdersAll.length === 0) return;
     const normalized = address.toLowerCase();
 
-    const statusToReason = (s: KeeperOrder["status"]) => {
-      if (s === "Filled") return "Take profit hit" as const;
-      if (s === "Liquidated") return "Liquidation hit" as const;
-      if (s === "Closed") return "Stop loss hit" as const;
-      return null;
-    };
-
     setTradeHistory((prev) => {
       let changed = false;
       const next = prev.map((e) => {
@@ -1336,10 +1723,16 @@ export default function Trade() {
         if (!match) return e;
         if (match.status === "Open") return e;
 
-        const reason = statusToReason(match.status);
+        const reason = deriveCloseReason(match, e);
         const closedAtMs =
           match.closedAt != null && match.closedAt.length > 0 ? Date.parse(match.closedAt) : NaN;
         const ts = Number.isFinite(closedAtMs) ? closedAtMs : Date.now();
+        const keeperClosePrice =
+          match.closePrice ??
+          match.stopLossPrice ??
+          match.takeProfitPrice ??
+          match.liquidationPrice ??
+          undefined;
 
         changed = true;
         return {
@@ -1350,6 +1743,14 @@ export default function Trade() {
           openedAt: e.openedAt ?? e.timestamp,
           closedAt: ts,
           closeTxHash: (match.closeTxHash as `0x${string}` | undefined) ?? e.closeTxHash,
+          closePrice: keeperClosePrice ?? e.closePrice,
+          entryPrice: match.entryPrice ?? e.entryPrice,
+          // IMPORTANT: PnL sign depends on `type` (Long/Short).
+          // Keeper provides `side`, so we must sync it to avoid "Stop loss but PnL positive".
+          type: (match.side ?? e.type) as HistoryEntry["type"],
+          leverage: match.leverage ?? e.leverage,
+          amount: (match.marginAmount ?? e.amount) as string,
+          // Prefer keeper classification (TP/SL/Liq) over stale local cache.
           closeReason: reason ?? e.closeReason,
         };
       });
@@ -1581,6 +1982,27 @@ export default function Trade() {
     closeAmountNum > maxCloseAmount &&
     maxCloseAmount > 0;
 
+  const leverageUi = useMemo(() => {
+    const pct = Math.max(0, Math.min(1, (leverage - 1) / 24));
+    const colorClass =
+      leverage <= 5
+        ? "text-emerald-400"
+        : leverage <= 12
+          ? "text-amber-300"
+          : "text-rose-400";
+    const glowClass =
+      leverage <= 5
+        ? "shadow-[0_0_14px_rgba(16,185,129,0.25)]"
+        : leverage <= 12
+          ? "shadow-[0_0_14px_rgba(251,191,36,0.25)]"
+          : "shadow-[0_0_14px_rgba(244,63,94,0.28)]";
+    const riskLabel = leverage <= 5 ? "Low risk" : leverage <= 12 ? "Medium risk" : "High risk";
+    const activeTrack = `linear-gradient(90deg, #3b82f6 0%, ${leverage <= 5 ? "#10b981" : leverage <= 12 ? "#f59e0b" : "#f43f5e"} ${Math.round(
+      pct * 100,
+    )}%, #363a59 ${Math.round(pct * 100)}%, #363a59 100%)`;
+    return { colorClass, glowClass, riskLabel, activeTrack };
+  }, [leverage]);
+
   const closeWarning = useMemo(() => {
     if (!closeExceedsMax || !pos) return null;
     const currentPrice = displayPrice?.price ?? 0;
@@ -1604,20 +2026,12 @@ export default function Trade() {
     };
   }, [closeExceedsMax, pos, displayPrice?.price, entryPrice, positionMargin]);
 
-  const totalRealizedPnL = useMemo(() => {
-    const closed = tradeHistory.filter((e) => e.status === "closed");
-    let sum = 0;
-    for (const entry of closed) {
-      const pnl = calculatePnL(entry);
-      if (pnl != null) sum += pnl;
-    }
-    return sum;
-  }, [tradeHistory]);
-
   const collateralEquity = useMemo(() => {
+    // On-chain `dexBalance` already includes realized PnL from closed positions.
+    // Equity = free balance + open margin + unrealized PnL.
     const deposited = Number(formatUnits(dexBalance ?? 0n, 18)) + openPositionMargin;
-    return deposited + totalUnrealizedPnL + totalRealizedPnL;
-  }, [dexBalance, openPositionMargin, totalUnrealizedPnL, totalRealizedPnL]);
+    return deposited + totalUnrealizedPnL;
+  }, [dexBalance, openPositionMargin, totalUnrealizedPnL]);
 
   const dexBalanceNum = Number(formatUnits(dexBalance ?? 0n, 18));
   const maxAvailableMargin = Math.max(0, Math.min(dexBalanceNum, collateralEquity));
@@ -1630,7 +2044,7 @@ export default function Trade() {
   const renderHistoryEntry = (entry: HistoryEntry) => {
     const entrySymbol = entry.symbol ?? chartSymbol;
     const keeperForSymbol = keeperOpenOrders.find((o) => o.market === entrySymbol && o.status === "Open");
-    const keeperForTime =
+    const keeperByHash =
       (entry.openTxHash
         ? keeperOrdersAll.find((o) => (o.openTxHash ?? "").toLowerCase() === entry.openTxHash!.toLowerCase())
         : null) ??
@@ -1638,10 +2052,67 @@ export default function Trade() {
         ? keeperOrdersAll.find((o) => (o.closeTxHash ?? "").toLowerCase() === entry.closeTxHash!.toLowerCase())
         : null) ??
       null;
+    const keeperForTime = keeperByHash ?? (() => {
+      // Fallback for legacy local history entries that don't have tx hashes.
+      const targetClosedAt = entry.closedAt ?? entry.timestamp;
+      let best: KeeperOrder | null = null;
+      let bestDiff = Number.POSITIVE_INFINITY;
+      for (const o of keeperOrdersAll) {
+        if (o.market !== entrySymbol) continue;
+        if (o.status === "Open" || !o.closedAt) continue;
+        const closeTs = Date.parse(o.closedAt);
+        if (!Number.isFinite(closeTs)) continue;
+        const diff = Math.abs(closeTs - targetClosedAt);
+        if (diff < bestDiff) {
+          best = o;
+          bestDiff = diff;
+        }
+      }
+      // Keep strict enough to avoid mismatching unrelated orders.
+      return bestDiff <= 30 * 60 * 1000 ? best : null;
+    })();
     const keeperOpenedAtMs = keeperForTime?.openedAt ? Date.parse(keeperForTime.openedAt) : NaN;
     const keeperClosedAtMs = keeperForTime?.closedAt ? Date.parse(keeperForTime.closedAt) : NaN;
     const currentPrice = chartPricesBySymbol[entrySymbol];
-    const pnlValue = calculatePnL(entry, currentPrice);
+    const keeperClosePrice =
+      keeperForTime?.closePrice ??
+      keeperForTime?.stopLossPrice ??
+      keeperForTime?.takeProfitPrice ??
+      keeperForTime?.liquidationPrice ??
+      undefined;
+    const pnlEntry: HistoryEntry = (() => {
+      if (!keeperForTime) return entry;
+      if (entry.status !== "closed") return entry;
+
+      // Always sync side from keeper when available, since PnL sign depends on it.
+      const syncedSide: HistoryEntry = keeperForTime.side
+        ? { ...entry, type: keeperForTime.side }
+        : entry;
+
+      // Only backfill prices/amounts/leverage when local history is missing or invalid.
+      if (
+        (syncedSide.closePrice == null || syncedSide.closePrice <= 0) ||
+        syncedSide.entryPrice <= 0
+      ) {
+        return {
+          ...syncedSide,
+          entryPrice: syncedSide.entryPrice ?? keeperForTime.entryPrice ?? syncedSide.entryPrice,
+          closePrice: syncedSide.closePrice ?? keeperClosePrice,
+          leverage: syncedSide.leverage ?? keeperForTime.leverage ?? syncedSide.leverage,
+          amount: syncedSide.amount ?? keeperForTime.marginAmount ?? syncedSide.amount,
+        };
+      }
+
+      return syncedSide;
+    })();
+    const pnlValue = calculatePnL(pnlEntry, currentPrice);
+    const keeperDerivedCloseReason =
+      entry.status === "closed" && keeperForTime ? deriveCloseReason(keeperForTime, entry) : undefined;
+
+    const displayCloseReason =
+      entry.status === "closed"
+        ? (keeperDerivedCloseReason ?? entry.closeReason ?? "Manual close")
+        : undefined;
     const sizeValue = entry.volume ?? Number(entry.amount) * entry.leverage;
     const openTimestamp = formatTimestamp(
       Number.isFinite(keeperOpenedAtMs) ? keeperOpenedAtMs : (entry.openedAt ?? entry.timestamp),
@@ -1694,7 +2165,12 @@ export default function Trade() {
             ["Open Time", openTimestamp],
             ["Position", entry.type],
             ["Entry", formatForSymbol(entry.entryPrice, entrySymbol)],
-            ["Price", currentPrice != null ? formatForSymbol(currentPrice, entrySymbol) : "—"],
+            [
+              "Price",
+              entry.status === "closed"
+                ? formatForSymbol(entry.closePrice ?? keeperClosePrice, entrySymbol)
+                : (currentPrice != null ? formatForSymbol(currentPrice, entrySymbol) : "—"),
+            ],
             ["Liq. Price", !liqPriceValue || Number.isNaN(liqPriceValue) ? "—" : formatCurrency(liqPriceValue)],
             ["Margin", formatZUSDCNumber(Number(entry.amount))],
             ["Leverage", `${entry.leverage}x`],
@@ -1713,7 +2189,12 @@ export default function Trade() {
                 ? formatForSymbol(keeperForSymbol?.stopLossPrice ?? entry.stopLoss, entrySymbol)
                 : formatForSymbol(entry.stopLoss, entrySymbol),
             ],
-            ["Close Reason", entry.status === "closed" ? (entry.closeReason ?? "—") : "—"],
+            [
+              "Close Reason",
+              entry.status === "closed"
+                ? formatCloseReasonLabel(displayCloseReason)
+                : "—",
+            ],
             [
               "Close Time",
               closeTimestamp,
@@ -2583,7 +3064,9 @@ export default function Trade() {
                           <span className="text-slate-400">Leverage</span>
                           <span className="ml-2 text-[11px] text-slate-500">Max 25x</span>
                         </div>
-                        <span className="text-slate-400">{leverage}x</span>
+                        <span className={`rounded-lg px-2 py-0.5 text-xs font-semibold ${leverageUi.colorClass} ${leverageUi.glowClass}`}>
+                          {leverage}x
+                        </span>
                       </div>
                       <input
                         type="range"
@@ -2592,8 +3075,10 @@ export default function Trade() {
                         value={leverage}
                         onChange={(e) => setLeverage(Number(e.target.value))}
                         disabled={hasPosition || closeAmount.trim().length > 0}
-                        className="w-full h-2 bg-[#363a59] rounded-lg appearance-none cursor-pointer accent-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                        style={{ background: leverageUi.activeTrack }}
+                        className="w-full h-2 rounded-lg appearance-none cursor-pointer accent-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
                       />
+                      <div className={`mt-1 text-[11px] ${leverageUi.colorClass}`}>{leverageUi.riskLabel}</div>
                       
                       {hasPosition && (
                         <p className="mt-1 text-[11px] text-slate-500">

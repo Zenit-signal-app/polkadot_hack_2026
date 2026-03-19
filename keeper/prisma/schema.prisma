@@ -59,6 +59,17 @@ model Order {
   // Price at which the order was closed/filled (null while open)
   closePrice Float?
 
+  // Close reason code:
+  // 0 = Manual (user-initiated close)
+  // 1 = TP (Take profit) - keeper-triggered
+  // 2 = SL (Stop loss) - keeper-triggered
+  // 3 = Liquidated (forced liquidation) - keeper-triggered
+  closeReasonCode Int @default(0) @map("close_reason")
+
+  // Final PnL captured from on-chain PositionClosed/PositionLiquidated event.
+  // Stored as string to preserve exact int256 value (18-decimal fixed-point).
+  finalPnl String? @map("final_pnl")
+
   // On-chain tx hash for the open transaction
   openTxHash String?
 
@@ -73,7 +84,7 @@ model Order {
   openedAt DateTime @default(now())
 
   // Timestamp when the position was closed/filled
-  closedAt DateTime?
+  closedAt DateTime? @map("closed_at")
 
   @@index([walletAddress])
   @@index([status])

@@ -4,44 +4,13 @@ import { executeOnChainClose } from "./executor.js";
 import { log } from "./logger.js";
 import { config } from "./config.js";
 import { notifyCacheReset } from "./cacheReset.js";
-import { calcLiquidationPrice } from "../../shared/tradeMath.js";
 import { publishOraclePrices } from "./oraclePublisher.js";
 import type { Order, Market } from "./types.js";
 import { ethers } from "ethers";
 import { PERPETUAL_DEX_ABI_HUMAN, symbolToBytes32 } from "./abi.js";
+import { checkOrderTrigger, closeReasonCodeToOrderStatus, CloseReasonCode } from "./closeReason.js";
 
-// ─── Trigger condition helpers ───────────────────────────────────────────────
-
-function estimateLiquidationPrice(order: Order): number {
-  const liq = calcLiquidationPrice(order.side, order.entryPrice, order.leverage, config.liquidationMmr);
-  return liq ?? order.liquidationPrice;
-}
-
-function shouldTakeProfit(order: Order, price: number): boolean {
-  if (order.takeProfitPrice == null) return false;
-  if (order.side === "Long") {
-    return price >= order.takeProfitPrice / SL_TP_TOLERANCE;
-  }
-  return price <= order.takeProfitPrice * SL_TP_TOLERANCE;
-}
-
-/** Small tolerance (0.02%) to handle price feed lag between keeper and frontend */
-const SL_TP_TOLERANCE = 1.0002;
-
-function shouldStopLoss(order: Order, price: number): boolean {
-  if (order.stopLossPrice == null) return false;
-  if (order.side === "Long") {
-    return price <= order.stopLossPrice * SL_TP_TOLERANCE;
-  }
-  return price >= order.stopLossPrice / SL_TP_TOLERANCE;
-}
-
-function shouldLiquidate(order: Order, price: number): boolean {
-  const liq = estimateLiquidationPrice(order);
-  return order.side === "Long"
-    ? price <= liq
-    : price >= liq;
-}
+// Trigger classification is delegated to `checkOrderTrigger()`.
 
 // ─── Core: processOpenPositions ──────────────────────────────────────────────
 
@@ -171,7 +140,7 @@ export async function processOpenPositions(): Promise<void> {
     const slDist = order.stopLossPrice != null
       ? `$${Math.abs(currentPrice - order.stopLossPrice).toFixed(2)} (${((Math.abs(currentPrice - order.stopLossPrice) / currentPrice) * 100).toFixed(2)}%)`
       : "not set";
-    const estimatedLiq = estimateLiquidationPrice(order);
+    const estimatedLiq = order.liquidationPrice;
     const liqDist = `$${Math.abs(currentPrice - estimatedLiq).toFixed(2)} (${((Math.abs(currentPrice - estimatedLiq) / currentPrice) * 100).toFixed(2)}%)`;
 
     log.info(tag, `Checking ${order.market} ${order.side} #${order.id.slice(0, 8)}`, {
@@ -185,10 +154,12 @@ export async function processOpenPositions(): Promise<void> {
       distToLiq: liqDist,
     });
 
-    let reason: "Liquidated" | "Filled" | "Closed" | null = null;
+    const closeReasonCode = checkOrderTrigger(order, currentPrice);
+    if (closeReasonCode === CloseReasonCode.Manual) continue;
 
-    if (shouldLiquidate(order, currentPrice)) {
-      reason = "Liquidated";
+    const reason = closeReasonCodeToOrderStatus(closeReasonCode);
+
+    if (closeReasonCode === CloseReasonCode.Liquidated) {
       log.warn(tag, `LIQUIDATION triggered`, {
         orderId: order.id,
         walletAddress: order.walletAddress,
@@ -197,47 +168,53 @@ export async function processOpenPositions(): Promise<void> {
         currentPrice: `$${currentPrice.toFixed(2)}`,
         liquidationPrice: `$${estimatedLiq.toFixed(2)}`,
       });
-    } else if (shouldTakeProfit(order, currentPrice)) {
-      reason = "Filled";
+    } else if (closeReasonCode === CloseReasonCode.TP) {
       log.action(tag, `TAKE PROFIT triggered`, {
         orderId: order.id,
         walletAddress: order.walletAddress,
         market: order.market,
         side: order.side,
         currentPrice: `$${currentPrice.toFixed(2)}`,
-        takeProfitPrice: `$${order.takeProfitPrice!.toFixed(2)}`,
+        takeProfitPrice: order.takeProfitPrice != null ? `$${order.takeProfitPrice.toFixed(2)}` : "—",
       });
-    } else if (shouldStopLoss(order, currentPrice)) {
-      reason = "Closed";
+    } else if (closeReasonCode === CloseReasonCode.SL) {
       log.action(tag, `STOP LOSS triggered`, {
         orderId: order.id,
         walletAddress: order.walletAddress,
         market: order.market,
         side: order.side,
         currentPrice: `$${currentPrice.toFixed(2)}`,
-        stopLossPrice: `$${order.stopLossPrice!.toFixed(2)}`,
+        stopLossPrice: order.stopLossPrice != null ? `$${order.stopLossPrice.toFixed(2)}` : "—",
       });
     }
-
-    if (!reason) continue;
 
     triggered++;
 
     // Execute close on-chain (with retry logic, gas optimization, nonce management)
     let txHash: string | null = null;
     let onchainSuccess = false;
+    let finalPnl: string | undefined = undefined;
     try {
       const result = await executeOnChainClose(order, currentPrice);
 
       txHash = result.txHash;
       onchainSuccess = result.success;
+      finalPnl = result.finalPnl != null ? result.finalPnl.toString() : undefined;
 
       if (result.success) {
+        if (finalPnl == null) {
+          log.warn(tag, "finalPnl not found in tx receipt logs (will store null)", {
+            orderId: order.id,
+            txHash: result.txHash,
+          });
+        }
         log.info(tag, `On-chain close succeeded`, {
           orderId: order.id,
           txHash: result.txHash,
           gasUsed: result.gasUsed?.toString(),
           keeperReward: result.keeperReward?.toString() ?? "none",
+          closeReasonCode,
+          finalPnl: finalPnl ?? "unknown",
           attempts: result.attempts,
         });
       } else {
@@ -246,6 +223,13 @@ export async function processOpenPositions(): Promise<void> {
           error: result.error,
           attempts: result.attempts,
         });
+      }
+
+      // Persist computed fields even if closePrice came from oracle.
+      // `closeOrder` will also store `finalPnl`.
+      if (onchainSuccess) {
+        // closeOrder call happens below.
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
       }
     } catch (err) {
       log.error(tag, `executeOnChainClose threw unexpectedly`, {
@@ -267,10 +251,18 @@ export async function processOpenPositions(): Promise<void> {
     }
 
     try {
-      await closeOrder(order.id, reason, currentPrice, txHash ?? undefined);
+      await closeOrder(
+        order.id,
+        reason,
+        currentPrice,
+        txHash ?? undefined,
+        closeReasonCode,
+        finalPnl,
+      );
       log.info(tag, `DB updated: order ${order.id.slice(0, 8)} → ${reason}`, {
         closePrice: `$${currentPrice.toFixed(2)}`,
         txHash: txHash ?? "none",
+        closeReasonCode,
       });
       notifyCacheReset(order.walletAddress);
     } catch (err) {

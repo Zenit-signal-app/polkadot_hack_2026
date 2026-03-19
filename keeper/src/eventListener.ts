@@ -6,11 +6,14 @@ import {
   type Log,
   type WatchContractEventReturnType,
 } from "viem";
+import { Wallet } from "ethers";
 import { config } from "./config.js";
 import { PERPETUAL_DEX_ABI } from "./abi.js";
 import {
   createOrder,
   findOpenOrderByWalletAndMarket,
+  findOrderByCloseTxHash,
+  findLatestOrderByWalletAndMarket,
   markClosedByEvent,
 } from "./db.js";
 import { updateSmartContractWithClosureStats } from "./executor.js";
@@ -18,6 +21,7 @@ import { fetchPrices } from "./price.js";
 import { log } from "./logger.js";
 import type { ClosureStats, Market, Order, Side } from "./types.js";
 import { calcLiquidationPrice } from "../../shared/tradeMath.js";
+import { checkOrderTrigger, closeReasonCodeToOrderStatus, CloseReasonCode } from "./closeReason.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -28,6 +32,13 @@ const INITIAL_RETRY_DELAY_MS = 2_000;
 
 const VALID_MARKETS = new Set<string>(["BTCUSD", "ETHUSD", "DOTUSD"]);
 const SIDE_MAP: Record<number, Side> = { 0: "Long", 1: "Short" };
+
+let keeperAddressLower: string | null = null;
+try {
+  keeperAddressLower = new Wallet(config.keeperPrivateKey).address.toLowerCase();
+} catch {
+  keeperAddressLower = null;
+}
 
 // ─── Chain & read-only client (viem) ─────────────────────────────────────────
 
@@ -88,6 +99,30 @@ function decodeIndexedTopics(eventLog: Log): {
 function estimateLiquidationPrice(entryPrice: number, leverage: number, side: Side): number {
   const liq = calcLiquidationPrice(side, entryPrice, leverage, config.liquidationMmr);
   return liq ?? 0;
+}
+
+function reconstructClosePriceFromPnl(
+  side: Side,
+  entryPrice: number,
+  leverage: number,
+  closedMargin: number,
+  pnl: bigint,
+): number | null {
+  if (!Number.isFinite(entryPrice) || entryPrice <= 0) return null;
+  if (!Number.isFinite(leverage) || leverage <= 0) return null;
+  if (!Number.isFinite(closedMargin) || closedMargin <= 0) return null;
+  const pnlAbs = Number(formatUnits(pnl < 0n ? -pnl : pnl, 18));
+  if (!Number.isFinite(pnlAbs)) return null;
+  const pnlSigned = pnl < 0n ? -pnlAbs : pnlAbs;
+  const positionSize = closedMargin * leverage;
+  if (!Number.isFinite(positionSize) || positionSize <= 0) return null;
+  const ratio = pnlSigned / positionSize;
+  const closePrice =
+    side === "Long"
+      ? entryPrice * (1 + ratio)
+      : entryPrice * (1 - ratio);
+  if (!Number.isFinite(closePrice) || closePrice <= 0) return null;
+  return closePrice;
 }
 
 // ─── Handler: PositionOpened ─────────────────────────────────────────────────
@@ -225,10 +260,21 @@ async function handlePositionClosed(eventLog: Log): Promise<void> {
 
   let order: Order | null = null;
   try {
-    order = await findOpenOrderByWalletAndMarket(
-      userAddress.toLowerCase(),
-      marketSymbol,
-    );
+    // 1) Try idempotency by closeTxHash (important when watcher already closed the order).
+    order = await findOrderByCloseTxHash(txHash);
+
+    // 2) Try openKey matching (works when watcher has not yet cleared openKey).
+    if (!order) {
+      order = await findOpenOrderByWalletAndMarket(
+        userAddress.toLowerCase(),
+        marketSymbol,
+      );
+    }
+
+    // 3) Fallback: most recent order for wallet+market.
+    if (!order) {
+      order = await findLatestOrderByWalletAndMarket(userAddress.toLowerCase(), marketSymbol);
+    }
   } catch (err) {
     log.error(TAG, `DB lookup failed for PositionClosed event`, {
       user: userAddress,
@@ -257,12 +303,64 @@ async function handlePositionClosed(eventLog: Log): Promise<void> {
   });
 
   try {
-    await markClosedByEvent(order.id, txHash);
+    const closePrice = reconstructClosePriceFromPnl(
+      order.side,
+      order.entryPrice,
+      order.leverage,
+      Number(amountFormatted),
+      pnl,
+    );
+    // Determine whether tx was submitted by keeper, and then classify closeReason.
+    let closeReasonCode: CloseReasonCode = CloseReasonCode.Manual;
+    let statusToSet: Order["status"] = "Closed";
+
+    try {
+      const tx = await publicClient.getTransaction({ hash: txHash as `0x${string}` });
+      const fromLower = tx?.from?.toLowerCase();
+      const isKeeperTx = Boolean(keeperAddressLower && fromLower && fromLower === keeperAddressLower);
+
+      if (isKeeperTx) {
+        if (closePrice != null) {
+          closeReasonCode = checkOrderTrigger(order, closePrice);
+          statusToSet = closeReasonCodeToOrderStatus(closeReasonCode);
+        } else {
+          closeReasonCode = CloseReasonCode.Manual;
+          statusToSet = "Closed";
+        }
+      } else {
+        // User-initiated close => manual (code 0)
+        closeReasonCode = CloseReasonCode.Manual;
+        statusToSet = "Closed";
+      }
+    } catch (err) {
+      log.warn(TAG, "Failed to fetch tx.from for PositionClosed classification", {
+        txHash,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    const updatedOrder = await markClosedByEvent(
+      order.id,
+      txHash,
+      closePrice ?? undefined,
+      statusToSet,
+      closeReasonCode,
+      pnl.toString(),
+    );
     log.action(
       TAG,
-      `Off-chain DB updated: order #${order.id.slice(0, 8)} → Closed`,
-      { orderId: order.id, closeTxHash: txHash },
+      `Off-chain DB updated: order #${order.id.slice(0, 8)} → ${statusToSet}`,
+      {
+        orderId: order.id,
+        closeTxHash: txHash,
+        closePrice: closePrice ?? "unknown",
+        closeReasonCode,
+        finalPnl: pnl.toString(),
+      },
     );
+
+    // Use the updated order values for smart-contract stats.
+    order = updatedOrder;
   } catch (err) {
     log.error(TAG, `Failed to update off-chain DB for order`, {
       orderId: order.id,
@@ -343,8 +441,22 @@ async function handlePositionLiquidated(eventLog: Log): Promise<void> {
   }
 
   let amount = 0n;
+  let pnl = 0n;
   if (data && data.length >= 66) {
     amount = BigInt(`0x${data.slice(2, 66)}`);
+    if (data.length >= 130) {
+      const rawPnl = BigInt(`0x${data.slice(66, 130)}`);
+      pnl =
+        rawPnl >
+        BigInt(
+          "0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        )
+          ? rawPnl -
+            BigInt(
+              "0x10000000000000000000000000000000000000000000000000000000000000000",
+            )
+          : rawPnl;
+    }
   }
 
   const marketSymbol = bytes32ToSymbol(marketBytes);
@@ -360,10 +472,21 @@ async function handlePositionLiquidated(eventLog: Log): Promise<void> {
 
   let order: Order | null = null;
   try {
-    order = await findOpenOrderByWalletAndMarket(
-      userAddress.toLowerCase(),
-      marketSymbol,
-    );
+    // 1) Try idempotency by closeTxHash.
+    order = await findOrderByCloseTxHash(txHash);
+
+    // 2) Try openKey matching.
+    if (!order) {
+      order = await findOpenOrderByWalletAndMarket(
+        userAddress.toLowerCase(),
+        marketSymbol,
+      );
+    }
+
+    // 3) Fallback: most recent order for wallet+market.
+    if (!order) {
+      order = await findLatestOrderByWalletAndMarket(userAddress.toLowerCase(), marketSymbol);
+    }
   } catch (err) {
     log.error(TAG, `DB lookup failed for PositionLiquidated event`, {
       user: userAddress,
@@ -383,12 +506,55 @@ async function handlePositionLiquidated(eventLog: Log): Promise<void> {
   }
 
   try {
-    await markClosedByEvent(order.id, txHash);
+    const closePrice = reconstructClosePriceFromPnl(
+      order.side,
+      order.entryPrice,
+      order.leverage,
+      Number(amountFormatted),
+      pnl,
+    );
+
+    let closeReasonCode: CloseReasonCode = CloseReasonCode.Manual;
+    let statusToSet: Order["status"] = "Closed";
+
+    try {
+      const tx = await publicClient.getTransaction({ hash: txHash as `0x${string}` });
+      const fromLower = tx?.from?.toLowerCase();
+      const isKeeperTx = Boolean(keeperAddressLower && fromLower && fromLower === keeperAddressLower);
+
+      if (isKeeperTx) {
+        if (closePrice != null) {
+          closeReasonCode = checkOrderTrigger(order, closePrice);
+          statusToSet = closeReasonCodeToOrderStatus(closeReasonCode);
+        } else {
+          closeReasonCode = CloseReasonCode.Manual;
+          statusToSet = "Closed";
+        }
+      } else {
+        closeReasonCode = CloseReasonCode.Manual;
+        statusToSet = "Closed";
+      }
+    } catch (err) {
+      log.warn(TAG, "Failed to fetch tx.from for PositionLiquidated classification", {
+        txHash,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    const updatedOrder = await markClosedByEvent(
+      order.id,
+      txHash,
+      closePrice ?? undefined,
+      statusToSet,
+      closeReasonCode,
+      pnl.toString(),
+    );
     log.action(
       TAG,
-      `Order #${order.id.slice(0, 8)} marked as Liquidated via on-chain event`,
-      { orderId: order.id, closeTxHash: txHash },
+      `Order #${order.id.slice(0, 8)} marked via on-chain event`,
+      { orderId: order.id, closeTxHash: txHash, closePrice: closePrice ?? "unknown", closeReasonCode },
     );
+    order = updatedOrder;
   } catch (err) {
     log.error(TAG, `Failed to mark order as liquidated`, {
       orderId: order.id,

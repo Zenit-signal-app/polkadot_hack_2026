@@ -1,20 +1,14 @@
 import { ethers } from "ethers";
 import { config } from "./config.js";
 import { PERPETUAL_DEX_ABI_HUMAN, symbolToBytes32 } from "./abi.js";
-import { NonceManager } from "./nonceManager.js";
+import { getTxManager } from "./txManager.js";
 import { estimateGasLimit, getOptimalGasFees, bumpGasFees } from "./gasOptimizer.js";
 import { log } from "./logger.js";
 import type { Order, ClosureStats, TxResult, RetryConfig, GasEstimate } from "./types.js";
 
 // ─── Provider & Wallet (ethers.js v6) ────────────────────────────────────────
 
-const provider = new ethers.JsonRpcProvider(config.rpcUrl, {
-  chainId: config.chainId,
-  name: "polkadot-hub-testnet",
-});
-
-const wallet = new ethers.Wallet(config.keeperPrivateKey, provider);
-const nonceManager = new NonceManager(provider, wallet.address);
+const { provider, wallet, nonceManager, runExclusive } = getTxManager(config.keeperPrivateKey);
 
 const contract = new ethers.Contract(
   config.perpDexAddress,
@@ -118,129 +112,155 @@ async function sendWithRetry(
     const attemptTag = `${tag}:attempt-${attempt}/${retryConfig.maxAttempts}`;
 
     try {
-      // ── Acquire nonce ─────────────────────────────────────────────────────
-      const nonce = await nonceManager.acquireNonce();
-      lastNonce = nonce;
+      // Ensure all tx from this wallet are serialized to avoid nonce collisions
+      const result = await runExclusive(async () => {
+        // ── Acquire nonce ───────────────────────────────────────────────────
+        const nonce = await nonceManager.acquireNonce();
+        lastNonce = nonce;
 
-      // ── Get gas fees ──────────────────────────────────────────────────────
-      let gasFees: GasEstimate;
-      if (attempt > 1 && lastGasFees && retryConfig.gasBumpOnRetry) {
-        gasFees = bumpGasFees(lastGasFees, retryConfig.gasBumpPct);
-      } else {
-        gasFees = await getOptimalGasFees(provider);
-      }
-      lastGasFees = gasFees;
+        // ── Get gas fees ────────────────────────────────────────────────────
+        let gasFees: GasEstimate;
+        if (attempt > 1 && lastGasFees && retryConfig.gasBumpOnRetry) {
+          gasFees = bumpGasFees(lastGasFees, retryConfig.gasBumpPct);
+        } else {
+          gasFees = await getOptimalGasFees(provider);
+        }
+        lastGasFees = gasFees;
 
-      // ── Build tx request for gas estimation ───────────────────────────────
-      const txRequest = await buildTx(nonce, gasFees, 0n);
-      const gasLimit = await estimateGasLimit(provider, txRequest);
+        // ── Build tx request for gas estimation ─────────────────────────────
+        const txRequest = await buildTx(nonce, gasFees, 0n);
+        const gasLimit = await estimateGasLimit(provider, txRequest);
 
-      // ── Build final tx with gas limit ─────────────────────────────────────
-      const finalTx = await buildTx(nonce, gasFees, gasLimit);
+        // ── Build final tx with gas limit ───────────────────────────────────
+        const finalTx = await buildTx(nonce, gasFees, gasLimit);
 
-      log.action(attemptTag, `Sending transaction`, {
-        nonce,
-        gasLimit: gasLimit.toString(),
-        feeType: gasFees.type,
-        ...(gasFees.type === "eip1559"
-          ? {
-              maxFee: `${ethers.formatUnits(gasFees.maxFeePerGas, "gwei")}gwei`,
-              priorityFee: `${ethers.formatUnits(gasFees.maxPriorityFeePerGas, "gwei")}gwei`,
-            }
-          : { gasPrice: `${ethers.formatUnits(gasFees.gasPrice, "gwei")}gwei` }),
-      });
-
-      // ── Submit transaction ────────────────────────────────────────────────
-      const txResponse = await wallet.sendTransaction(finalTx);
-      const txHash = txResponse.hash;
-
-      log.info(attemptTag, `Tx broadcast`, { txHash });
-
-      // ── Wait for receipt ──────────────────────────────────────────────────
-      const receipt = await waitForReceipt(txHash, retryConfig.receiptTimeoutMs);
-
-      if (!receipt) {
-        log.warn(attemptTag, `Receipt timeout after ${retryConfig.receiptTimeoutMs}ms – tx may still confirm`, {
-          txHash,
+        log.action(attemptTag, `Sending transaction`, {
+          nonce,
+          gasLimit: gasLimit.toString(),
+          feeType: gasFees.type,
+          ...(gasFees.type === "eip1559"
+            ? {
+                maxFee: `${ethers.formatUnits(gasFees.maxFeePerGas, "gwei")}gwei`,
+                priorityFee: `${ethers.formatUnits(gasFees.maxPriorityFeePerGas, "gwei")}gwei`,
+              }
+            : { gasPrice: `${ethers.formatUnits(gasFees.gasPrice, "gwei")}gwei` }),
         });
 
-        if (attempt < retryConfig.maxAttempts) {
-          log.info(attemptTag, `Will retry with bumped gas (replacement tx)`);
-          // Don't roll back nonce – we'll reuse it with higher gas
-          nonceManager.rollback();
-          await sleepWithBackoff(attempt, retryConfig);
-          continue;
+        // ── Submit transaction ──────────────────────────────────────────────
+        const txResponse = await wallet.sendTransaction(finalTx);
+        const txHash = txResponse.hash;
+
+        log.info(attemptTag, `Tx broadcast`, { txHash });
+
+        // ── Wait for receipt ────────────────────────────────────────────────
+        const receipt = await waitForReceipt(txHash, retryConfig.receiptTimeoutMs);
+
+        if (!receipt) {
+          log.warn(attemptTag, `Receipt timeout after ${retryConfig.receiptTimeoutMs}ms – tx may still confirm`, {
+            txHash,
+          });
+
+          if (attempt < retryConfig.maxAttempts) {
+            log.info(attemptTag, `Will retry with bumped gas (replacement tx)`);
+            // Don't roll back nonce – we'll reuse it with higher gas
+            nonceManager.rollback();
+            await sleepWithBackoff(attempt, retryConfig);
+            return {
+              success: false,
+              txHash,
+              gasUsed: null,
+              blockNumber: null,
+              keeperReward: null,
+              finalPnl: null,
+              error: "Receipt timeout",
+              attempts: attempt,
+            };
+          }
+
+          return {
+            success: false,
+            txHash,
+            gasUsed: null,
+            blockNumber: null,
+            keeperReward: null,
+            finalPnl: null,
+            error: "Receipt timeout",
+            attempts: attempt,
+          };
         }
 
-        return {
-          success: false,
-          txHash,
-          gasUsed: null,
-          blockNumber: null,
-          keeperReward: null,
-          error: "Receipt timeout",
-          attempts: attempt,
-        };
-      }
+        // ── Check receipt status ────────────────────────────────────────────
+        if (receipt.status === 0) {
+          log.error(attemptTag, `Transaction reverted on-chain`, {
+            txHash,
+            gasUsed: receipt.gasUsed.toString(),
+            blockNumber: receipt.blockNumber,
+          });
 
-      // ── Check receipt status ──────────────────────────────────────────────
-      if (receipt.status === 0) {
-        log.error(attemptTag, `Transaction reverted on-chain`, {
+          return {
+            success: false,
+            txHash,
+            gasUsed: receipt.gasUsed,
+            blockNumber: receipt.blockNumber,
+            keeperReward: null,
+            finalPnl: null,
+            error: "Transaction reverted on-chain",
+            attempts: attempt,
+          };
+        }
+
+        // ── Parse keeper reward + closure PnL from logs ────────────────────
+        let keeperReward: bigint | null = null;
+        let finalPnl: bigint | null = null;
+        try {
+          const iface = new ethers.Interface(PERPETUAL_DEX_ABI_HUMAN);
+          for (const receiptLog of receipt.logs) {
+            try {
+              const parsed = iface.parseLog({
+                topics: receiptLog.topics as string[],
+                data: receiptLog.data,
+              });
+              if (parsed && parsed.name === "KeeperRewardClaimed") {
+                keeperReward = parsed.args[1] as bigint;
+              }
+              if (
+                parsed &&
+                (parsed.name === "PositionClosed" || parsed.name === "PositionLiquidated")
+              ) {
+                // event PositionClosed(user, market, amount, pnl)
+                // event PositionLiquidated(user, market, amount, pnl)
+                finalPnl = parsed.args[3] as bigint;
+              }
+            } catch {
+              // Not a matching event
+            }
+          }
+        } catch {
+          // Log parsing is optional
+        }
+
+        log.action(attemptTag, `Transaction confirmed`, {
           txHash,
-          gasUsed: receipt.gasUsed.toString(),
           blockNumber: receipt.blockNumber,
+          gasUsed: receipt.gasUsed.toString(),
+          keeperReward: keeperReward
+            ? `${ethers.formatUnits(keeperReward, 18)} zUSDC`
+            : "none",
         });
 
         return {
-          success: false,
+          success: true,
           txHash,
           gasUsed: receipt.gasUsed,
           blockNumber: receipt.blockNumber,
-          keeperReward: null,
-          error: "Transaction reverted on-chain",
+          keeperReward,
+          finalPnl,
+          error: null,
           attempts: attempt,
         };
-      }
-
-      // ── Parse keeper reward from logs ─────────────────────────────────────
-      let keeperReward: bigint | null = null;
-      try {
-        const iface = new ethers.Interface(PERPETUAL_DEX_ABI_HUMAN);
-        for (const receiptLog of receipt.logs) {
-          try {
-            const parsed = iface.parseLog({
-              topics: receiptLog.topics as string[],
-              data: receiptLog.data,
-            });
-            if (parsed && parsed.name === "KeeperRewardClaimed") {
-              keeperReward = parsed.args[1] as bigint;
-            }
-          } catch {
-            // Not a matching event
-          }
-        }
-      } catch {
-        // Log parsing is optional
-      }
-
-      log.action(attemptTag, `Transaction confirmed`, {
-        txHash,
-        blockNumber: receipt.blockNumber,
-        gasUsed: receipt.gasUsed.toString(),
-        keeperReward: keeperReward
-          ? `${ethers.formatUnits(keeperReward, 18)} zUSDC`
-          : "none",
       });
 
-      return {
-        success: true,
-        txHash,
-        gasUsed: receipt.gasUsed,
-        blockNumber: receipt.blockNumber,
-        keeperReward,
-        error: null,
-        attempts: attempt,
-      };
+      return result;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
 
@@ -280,6 +300,7 @@ async function sendWithRetry(
           gasUsed: null,
           blockNumber: null,
           keeperReward: null,
+          finalPnl: null,
           error: errMsg,
           attempts: attempt,
         };
@@ -314,6 +335,7 @@ async function sendWithRetry(
         gasUsed: null,
         blockNumber: null,
         keeperReward: null,
+        finalPnl: null,
         error: errMsg,
         attempts: attempt,
       };
@@ -326,6 +348,7 @@ async function sendWithRetry(
     gasUsed: null,
     blockNumber: null,
     keeperReward: null,
+    finalPnl: null,
     error: "Exhausted all retry attempts",
     attempts: retryConfig.maxAttempts,
   };

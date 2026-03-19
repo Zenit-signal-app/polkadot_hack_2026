@@ -41,10 +41,11 @@ To avoid issues like TP/SL not triggering or faucet transfers failing, make sure
    - `TOKEN_ADDRESS`
    - `ORACLE_ADDRESS` — deployed `ZenitOracle` used for on-chain settlement prices
    - `KEEPER_PRIVATE_KEY` — keeper signer (must have enough PAS for gas)
+   - `ORACLE_PRIVATE_KEY` (optional) — dedicated updater key for `ZenitOracle` (must be authorized as updater on-chain)
    - `API_PORT=3100`
 2. Install & build:
    - `cd keeper && npm install`
-   - `npx prisma generate`
+   - `npx prisma generate` (Windows: if you hit EPERM rename errors, use `npx prisma db push --skip-generate` instead)
    - `npm run build`
 3. Start: `cd keeper && npm run start`
 4. Verify:
@@ -59,7 +60,26 @@ To avoid issues like TP/SL not triggering or faucet transfers failing, make sure
 
 ---
 
-## 3. Contract: Enable Keeper (Required for TP/SL)
+## 3. Keeper Database Migration (Required after schema changes)
+Keeper stores orders in SQLite via Prisma. If you updated the Prisma schema (for example: `close_reason`, `final_pnl`, `closed_at`), apply it to the local DB:
+
+1. `cd keeper`
+2. Apply schema to SQLite:
+   - Preferred (if `prisma generate` works): `npm run db:push` (or `npx prisma db push`)
+   - Windows workaround (if `prisma generate` fails with EPERM): `npx prisma db push --skip-generate`
+3. Restart keeper.
+
+Close reason codes (persisted in DB and shown in UI):
+- `closeReasonCode=0` = Manual close
+- `closeReasonCode=1` = TP (Take profit) by keeper
+- `closeReasonCode=2` = SL (Stop loss) by keeper
+- `closeReasonCode=3` = Liquidated (forced liquidation) by keeper
+
+Note: keeper writes `status='Closed'` for all non-open terminal outcomes; the detailed reason is stored in `close_reason`.
+
+---
+
+## 4. Contract: Enable Keeper (Required for TP/SL)
 The `PerpetualDEX` contract must authorize the keeper wallet. After deploying:
 
 1. Get the keeper wallet address (derived from `KEEPER_PRIVATE_KEY`).
@@ -74,7 +94,7 @@ Without this, the keeper cannot close positions on-chain and TP/SL will not exec
 
 ---
 
-## 4. Running the Stack
+## 5. Running the Stack
 1. Start the keeper service and monitor logs:
    - Verify it publishes oracle prices (best-effort) and triggers closures when price crosses TP/SL/Liq.
    - Keep **only one keeper instance** listening on port `3100` to avoid nonce / tx-pool issues.
@@ -83,7 +103,7 @@ Without this, the keeper cannot close positions on-chain and TP/SL will not exec
 
 ---
 
-## 5. Debugging Tips
+## 6. Debugging Tips
 | Issue | Cause | Fix |
 | --- | --- | --- |
 | TP/SL/Liq never fires | Keeper not running, keeper not authorized, or TP/SL not registered | Start keeper, call `setKeeperAddress`, ensure frontend can reach `VITE_KEEPER_URL`. Check `GET /diagnostic`. |
@@ -94,7 +114,7 @@ Without this, the keeper cannot close positions on-chain and TP/SL will not exec
 
 ---
 
-## 6. Recommended Process
+## 7. Recommended Process
 - Use PM2/systemd to keep keeper + faucet (if separate) alive.
 - Enable monitoring/alerting for keeper errors.
 - Keep `.env` files out of git (add to `.gitignore`).

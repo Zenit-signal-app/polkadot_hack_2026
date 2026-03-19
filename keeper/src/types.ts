@@ -44,6 +44,16 @@ export interface Order {
   /** Price when closed/filled */
   closePrice: number | null;
 
+  // Close reason code:
+  // 0 = Manual (user-initiated close)
+  // 1 = TP (Take profit) - keeper-triggered
+  // 2 = SL (Stop loss) - keeper-triggered
+  // 3 = Liquidated - keeper-triggered
+  closeReasonCode: number;
+
+  // int256 pnl emitted by contract (18-decimal fixed-point), stored as string.
+  finalPnl: string | null;
+
   openTxHash: string | null;
   closeTxHash: string | null;
 
@@ -127,6 +137,8 @@ export interface TxResult {
   gasUsed: bigint | null;
   blockNumber: number | null;
   keeperReward: bigint | null;
+  // int256 pnl emitted by the contract (18-decimal fixed-point), when available.
+  finalPnl: bigint | null;
   error: string | null;
   attempts: number;
 }
@@ -151,6 +163,8 @@ export interface KeeperConfig {
   perpDexAddress: `0x${string}`;
   tokenAddress: `0x${string}`;
   keeperPrivateKey: `0x${string}`;
+  /** Optional dedicated signer for oracle publishing (falls back to keeperPrivateKey) */
+  oraclePrivateKey: `0x${string}` | null;
   pollIntervalMs: number;
   pythEndpoint: string;
   apiPort: number;

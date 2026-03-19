@@ -1,74 +1,65 @@
 # Zenit Perpetual DEX - Frontend
 
-Giao diện web cho Perpetual DEX, lấy cảm hứng từ GMX Interface.
+React + Vite trading interface for Zenit Perpetual DEX (Polkadot EVM testnet).
 
-## Yêu cầu
+## Requirements
 
-- Node.js 18+
-- Hardhat node đang chạy (cho localhost)
+- Node.js 20+
+- Wallet extension (MetaMask / RainbowKit-supported wallet)
+- Keeper service reachable from browser (`VITE_KEEPER_URL`)
 
-## Cài đặt
+## Install
 
 ```bash
 cd frontend
 npm install
 ```
 
-## Chạy
-
-### 1. Khởi động Hardhat node (terminal 1)
+## Run
 
 ```bash
-cd ..
-npm run node
-```
-
-### 2. Deploy contracts lên localhost (terminal 2)
-
-```bash
-npm run deploy -- --network localhost
-```
-
-### 3. Cập nhật `.env` phía frontend
-
-Sau khi deploy xong, chỉnh file `.env` trong thư mục `frontend` để dùng địa chỉ mới:
-
-```
-VITE_PERP_DEX_ADDRESS=0x...
-VITE_TOKEN_ADDRESS=0x...
-VITE_REWARD_ADDRESS=0x...
-VITE_WALLETCONNECT_PROJECT_ID=your_project_id
-```
-
-> Mặc định bộ frontend đang đồ mặt `VITE_PERP_DEX_ADDRESS=0xa8de3e548054417e4d918FAC46E990aF623AC7BA`, `VITE_TOKEN_ADDRESS=0x277E42B9454fB36A7Eaa52D4cE332bEF71dd017a`, và `VITE_REWARD_ADDRESS=0x5b218Bf85172a3df8017A3f29322B93B05a4C3C9`.
-
-### 4. Chạy frontend (terminal 3)
-
-```bash
-cd frontend
 npm run dev
 ```
 
-Mở http://localhost:3010
+Default local URL is shown by Vite in terminal.
 
-## Cấu hình
+## Build
 
-- **WalletConnect**: Lấy projectId miễn phí tại https://cloud.walletconnect.com và thêm vào `.env`:
-  ```
-  VITE_WALLETCONNECT_PROJECT_ID=your_project_id
-  ```
+```bash
+npm run build
+```
 
-- **Contract addresses**: Mặc định dùng địa chỉ từ deploy mặc định. Khi deploy lên localhost, cập nhật trong `.env`.
+## Environment (`frontend/.env`)
 
-## Tính năng
+Required:
 
-- **Trade đa thị trường**: Mở, tăng, đóng vị thế Long/Short trên BTCUSD, ETHUSD và DOTUSD mà không ghi đè các thị trường khác; `Position (zUSDC)` tự động tổng hợp margin khi dữ liệu refetch sau giao dịch thành công.
-- **Rewards**: Xem và claim reward theo volume giao dịch
+```
+VITE_RPC_URL=https://...
+VITE_PERP_DEX_ADDRESS=0x...
+VITE_TOKEN_ADDRESS=0x...
+VITE_ORACLE_ADDRESS=0x...
+VITE_KEEPER_URL=http://127.0.0.1:3100
+```
+
+## Key features
+
+- Multi-market trading (BTCUSD / ETHUSD / DOTUSD): open, increase, close.
+- UI + keeper synchronization for TP/SL/Liquidation status.
+- Auto reconciliation of local history with keeper `/orders` data.
+- Cache reset signal from keeper (`/cache/reset`) without deleting user history.
+- Rich order confirmation notice with copyable tx/order information.
+- Closed PnL rendering is reconciled against keeper close data (close price + timestamps), including legacy-history fallbacks.
+- Equity and available margin display align with on-chain accounting (`dexBalance + openMargin + unrealizedPnL`).
+- Better transaction UX:
+  - conservative gas estimation
+  - soft-timeout receipt waiting (UI unblocks quickly; receipt is still awaited in background)
+  - applies to `approve` (deposit flow) and `openPosition`/`increasePosition`
+  - clearer tx error messages from RPC/wallet
 
 ## Tech Stack
 
 - React 18 + TypeScript
 - Vite
-- wagmi + RainbowKit (ví)
+- wagmi + RainbowKit
 - Tailwind CSS
 - viem + ethers

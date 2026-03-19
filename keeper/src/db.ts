@@ -139,11 +139,41 @@ export async function findOpenOrderByWalletAndMarket(
   return (order as unknown as Order) ?? null;
 }
 
+/**
+ * Find an order by the close transaction hash (idempotency).
+ * Useful when the watcher already closed the order and cleared `openKey`,
+ * while the event listener processes PositionClosed/Liquidated afterwards.
+ */
+export async function findOrderByCloseTxHash(closeTxHash: string): Promise<Order | null> {
+  const order = await prisma.order.findFirst({
+    where: { closeTxHash: closeTxHash ?? null },
+    orderBy: { closedAt: "desc" },
+  });
+  return (order as unknown as Order) ?? null;
+}
+
+/**
+ * Fallback correlation: find the most recent order for wallet+market,
+ * regardless of current status.
+ *
+ * This is best-effort and should rarely be hit if (1) openKey matching
+ * or (2) closeTxHash matching works.
+ */
+export async function findLatestOrderByWalletAndMarket(walletAddress: string, market: string): Promise<Order | null> {
+  const order = await prisma.order.findFirst({
+    where: { walletAddress: walletAddress.toLowerCase(), market },
+    orderBy: { openedAt: "desc" },
+  });
+  return (order as unknown as Order) ?? null;
+}
+
 export async function closeOrder(
   id: string,
   status: OrderStatus,
   closePrice: number,
   closeTxHash?: string,
+  closeReasonCode?: number,
+  finalPnl?: string,
 ): Promise<Order> {
   return prisma.order.update({
     where: { id },
@@ -151,6 +181,8 @@ export async function closeOrder(
       status,
       closePrice,
       closeTxHash: closeTxHash ?? null,
+      closeReasonCode: closeReasonCode ?? 0,
+      finalPnl: finalPnl ?? null,
       closedAt: new Date(),
       openKey: null,
     },
@@ -177,13 +209,18 @@ export async function markClosedByEvent(
   id: string,
   closeTxHash: string,
   closePrice?: number,
+  status: OrderStatus = "Closed",
+  closeReasonCode?: number,
+  finalPnl?: string,
 ): Promise<Order> {
   return prisma.order.update({
     where: { id },
     data: {
-      status: "Closed",
+      status,
       closePrice: closePrice ?? null,
       closeTxHash,
+      closeReasonCode: closeReasonCode ?? 0,
+      finalPnl: finalPnl ?? null,
       closedAt: new Date(),
       openKey: null,
     },

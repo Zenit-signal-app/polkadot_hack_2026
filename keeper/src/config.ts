@@ -23,6 +23,7 @@ export const config: KeeperConfig = {
   perpDexAddress: env("PERP_DEX_ADDRESS", "0xa8de3e548054417e4d918FAC46E990aF623AC7BA") as `0x${string}`,
   tokenAddress: env("TOKEN_ADDRESS", "0x277E42B9454fB36A7Eaa52D4cE332bEF71dd017a") as `0x${string}`,
   keeperPrivateKey: env("KEEPER_PRIVATE_KEY") as `0x${string}`,
+  oraclePrivateKey: (process.env.ORACLE_PRIVATE_KEY?.trim() as `0x${string}` | undefined) ?? null,
   pollIntervalMs: Number(env("POLL_INTERVAL_MS", "5000")),
   pythEndpoint: env("PYTH_ENDPOINT", "https://hermes.pyth.network"),
   apiPort: Number(env("API_PORT", "3100")),
