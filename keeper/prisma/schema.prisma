@@ -1,5 +1,7 @@
 generator client {
   provider = "prisma-client-js"
+  // Windows fix: avoid dll.node rename EPERM by using the binary engine.
+  engineType = "binary"
 }
 
 datasource db {
@@ -19,6 +21,13 @@ model Order {
 
   // Market symbol (e.g. "BTCUSD", "ETHUSD", "DOTUSD")
   market String
+
+  /**
+   * Enforces "only 1 Open order per wallet+market".
+   * When status=Open, this is `${lower(walletAddress)}:${market}`.
+   * When status!=Open, this is null (so historical rows don't collide).
+   */
+  openKey String? @unique
 
   // Position direction
   side Side
@@ -52,6 +61,10 @@ model Order {
 
   // On-chain tx hash for the open transaction
   openTxHash String?
+
+  // Optional: unique on-chain event identity (txHash:logIndex) for idempotency
+  openEventId String? @unique
+  openLogIndex Int?
 
   // On-chain tx hash for the close/fill transaction
   closeTxHash String?

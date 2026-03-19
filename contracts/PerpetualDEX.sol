@@ -5,10 +5,12 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
 
 // user defined interface imports
 import "./interface/IPerpDEX.sol";
 import "./interface/IReward.sol";
+import "./ZenitOracle.sol";
 
 /**
  * @title Perpetual DEX contract.
@@ -24,19 +26,29 @@ contract PerpetualDEX is IPerpDEX, IPosition, Ownable, ReentrancyGuard {
     // Authorized keeper for TP/SL execution (set by owner)
     address public keeperAddress;
 
+    // On-chain oracle for settlement (prices are 1e18 scaled)
+    ZenitOracle public oracle;
+
+    // maintenance margin rate (1e18 = 100%)
+    uint256 public maintenanceMarginRateE18 = 1e16; // 1%
+
     // Holds the user balances
     mapping(address => uint256) public balances;
     // Holds the user positions per market: user => market (bytes32) => Position
     mapping(address => mapping(bytes32 => Position)) public positions;
 
     event KeeperRewardClaimed(address indexed keeper, uint256 amount);
+    event OracleUpdated(address indexed oracle);
+    event MaintenanceMarginRateUpdated(uint256 mmrE18);
 
     constructor(
         address tokenAddress, // Address of the trading token
-        address rewardContractAddress // Address of the reward contract
+        address rewardContractAddress, // Address of the reward contract
+        address oracleAddress // Address of the oracle contract
     ) Ownable(msg.sender) {
         tradingToken = IERC20(tokenAddress);
         rewardContract = IRewardContract(rewardContractAddress);
+        oracle = ZenitOracle(oracleAddress);
     }
 
     /**
@@ -154,6 +166,17 @@ contract PerpetualDEX is IPerpDEX, IPosition, Ownable, ReentrancyGuard {
         keeperAddress = _keeper;
     }
 
+    function setOracle(address _oracle) external onlyOwner {
+        oracle = ZenitOracle(_oracle);
+        emit OracleUpdated(_oracle);
+    }
+
+    function setMaintenanceMarginRate(uint256 _mmrE18) external onlyOwner {
+        require(_mmrE18 <= 5e17, "MMR too high"); // <= 50%
+        maintenanceMarginRateE18 = _mmrE18;
+        emit MaintenanceMarginRateUpdated(_mmrE18);
+    }
+
     /**
      * @dev Keeper closes a user's position when TP/SL is hit. Only callable by keeperAddress.
      * @param _user The user whose position to close.
@@ -167,7 +190,7 @@ contract PerpetualDEX is IPerpDEX, IPosition, Ownable, ReentrancyGuard {
         uint256 _amount,
         uint256 _closePrice
     ) external nonReentrant returns (uint256 keeperReward) {
-        _closePrice; // Reserved for oracle price; silence unused
+        _closePrice; // Reserved; settlement uses on-chain oracle
         require(keeperAddress != address(0), "Keeper not set");
         require(msg.sender == keeperAddress, "Only keeper");
         require(_amount > 0, "Amount must be greater than 0");
@@ -207,7 +230,9 @@ contract PerpetualDEX is IPerpDEX, IPosition, Ownable, ReentrancyGuard {
     ) private {
         balances[msg.sender] -= _amount;
 
-        positions[msg.sender][_market] = Position(_amount, _position, _leverage);
+        uint256 entryPriceE18 = oracle.getPrice(_market);
+        require(entryPriceE18 > 0, "Oracle price not set");
+        positions[msg.sender][_market] = Position(_amount, _position, _leverage, entryPriceE18);
 
         _setReward(_amount * _leverage);
 
@@ -251,15 +276,22 @@ contract PerpetualDEX is IPerpDEX, IPosition, Ownable, ReentrancyGuard {
     ) private {
         _setReward(_amount * position.leverage);
 
+        (int256 pnl, bool liquidated) = _calcPnlAndLiquidation(position, _amount, oracle.getPrice(_market));
+
         if (position.amount == _amount) {
             delete positions[msg.sender][_market];
         } else {
             position.amount -= _amount;
         }
 
-        balances[msg.sender] += _amount;
+        uint256 credit = _settle(msg.sender, _amount, pnl);
+        balances[msg.sender] += credit;
 
-        emit PositionClosed(msg.sender, _market, _amount);
+        if (liquidated) {
+            emit PositionLiquidated(msg.sender, _market, _amount, pnl);
+        } else {
+            emit PositionClosed(msg.sender, _market, _amount, pnl);
+        }
     }
 
     /**
@@ -273,15 +305,61 @@ contract PerpetualDEX is IPerpDEX, IPosition, Ownable, ReentrancyGuard {
     ) private {
         _setRewardForUser(_amount * position.leverage, _user);
 
+        (int256 pnl, bool liquidated) = _calcPnlAndLiquidation(position, _amount, oracle.getPrice(_market));
+
         if (position.amount == _amount) {
             delete positions[_user][_market];
         } else {
             position.amount -= _amount;
         }
 
-        balances[_user] += _amount;
+        uint256 credit = _settle(_user, _amount, pnl);
+        balances[_user] += credit;
 
-        emit PositionClosed(_user, _market, _amount);
+        if (liquidated) {
+            emit PositionLiquidated(_user, _market, _amount, pnl);
+        } else {
+            emit PositionClosed(_user, _market, _amount, pnl);
+        }
+    }
+
+    function _calcPnlAndLiquidation(
+        Position storage position,
+        uint256 marginToClose,
+        uint256 closePriceE18
+    ) private view returns (int256 pnl, bool liquidated) {
+        require(closePriceE18 > 0, "Oracle price not set");
+        uint256 entry = position.entryPriceE18;
+        require(entry > 0, "Entry not set");
+
+        // positionSize = margin * leverage (zUSDC units)
+        uint256 positionSize = marginToClose * uint256(position.leverage);
+
+        // pnlAbs = positionSize * abs(close-entry) / entry
+        uint256 absDelta = closePriceE18 >= entry ? closePriceE18 - entry : entry - closePriceE18;
+        uint256 pnlAbs = Math.mulDiv(positionSize, absDelta, entry);
+
+        bool isProfit = (position.position == PositionType.Long)
+            ? (closePriceE18 >= entry)
+            : (closePriceE18 <= entry);
+
+        pnl = isProfit ? int256(pnlAbs) : -int256(pnlAbs);
+
+        // Liquidation check on the portion closed: if loss >= marginToClose * (1 - mmr)
+        if (!isProfit) {
+            uint256 maxLoss = Math.mulDiv(marginToClose, (1e18 - maintenanceMarginRateE18), 1e18);
+            liquidated = pnlAbs >= maxLoss;
+        }
+    }
+
+    function _settle(address user, uint256 marginToClose, int256 pnl) private pure returns (uint256 credit) {
+        user; // reserved
+        if (pnl >= 0) {
+            return marginToClose + uint256(pnl);
+        }
+        uint256 loss = uint256(-pnl);
+        if (loss >= marginToClose) return 0;
+        return marginToClose - loss;
     }
 
     /**

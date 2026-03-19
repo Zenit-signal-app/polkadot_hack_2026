@@ -23,6 +23,7 @@ interface IPosition {
         uint256 amount;
         PositionType position;
         uint8 leverage;
+        uint256 entryPriceE18;
     }
 
     /**
@@ -55,7 +56,9 @@ interface IPosition {
      * @param market The market symbol.
      * @param amount The amount of the position being closed.
      */
-    event PositionClosed(address indexed user, bytes32 indexed market, uint256 amount);
+    event PositionClosed(address indexed user, bytes32 indexed market, uint256 amount, int256 pnl);
+
+    event PositionLiquidated(address indexed user, bytes32 indexed market, uint256 amount, int256 pnl);
 
     /**
      * Opens a new trading position for a market.

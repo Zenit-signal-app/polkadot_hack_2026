@@ -1,4 +1,5 @@
 import Decimal from "decimal.js";
+import { calcLiquidationPrice } from "@shared/tradeMath";
 
 export interface PnLResult {
   pnl: number;
@@ -59,18 +60,7 @@ export function calculateLiquidationPrice(
   leverage: number,
   maintenanceMarginRate = 0.01,
 ): string {
-  if (entryPrice <= 0 || leverage <= 0) {
-    return "0.00";
-  }
-
-  const entry = new Decimal(entryPrice);
-  const leverageDec = new Decimal(leverage);
-  const mmrDec = new Decimal(maintenanceMarginRate);
-  const invLeverage = Decimal.div(1, leverageDec);
-
-  const liability = side === "Long"
-    ? entry.mul(new Decimal(1).sub(invLeverage).add(mmrDec))
-    : entry.mul(new Decimal(1).add(invLeverage).sub(mmrDec));
-
-  return liability.toFixed(2);
+  const liq = calcLiquidationPrice(side, entryPrice, leverage, maintenanceMarginRate);
+  if (liq == null) return "0.00";
+  return new Decimal(liq).toFixed(2);
 }

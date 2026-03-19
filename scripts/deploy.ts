@@ -46,10 +46,20 @@ async function main() {
   const rewardAddress = await reward.getAddress();
   console.log("RewardContract deployed to:", rewardAddress);
 
+  await sleep(2000);
+  const Oracle = await ethers.getContractFactory("ZenitOracle");
+  const oracle = await deployWithRetry(
+    (o) => Oracle.deploy(o ?? {}),
+    signer.address
+  );
+  await oracle.waitForDeployment();
+  const oracleAddress = await oracle.getAddress();
+  console.log("ZenitOracle deployed to:", oracleAddress);
+
   await sleep(3000);
   const PerpetualDEX = await ethers.getContractFactory("PerpetualDEX");
   const dex = await deployWithRetry(
-    (o) => PerpetualDEX.deploy(zusdc, rewardAddress, o ?? {}),
+    (o) => PerpetualDEX.deploy(zusdc, rewardAddress, oracleAddress, o ?? {}),
     signer.address
   );
   await dex.waitForDeployment();
@@ -69,9 +79,11 @@ async function main() {
   console.log(`VITE_DEX_ADDRESS=${dexAddress}`);
   console.log(`VITE_TOKEN_ADDRESS=${zusdc}`);
   console.log(`VITE_REWARD_ADDRESS=${rewardAddress}`);
+  console.log(`VITE_ORACLE_ADDRESS=${oracleAddress}`);
   console.log("\n--- keeper/.env ---");
   console.log(`PERP_DEX_ADDRESS="${dexAddress}"`);
   console.log(`TOKEN_ADDRESS="${zusdc}"`);
+  console.log(`ORACLE_ADDRESS="${oracleAddress}"`);
   console.log("\n--- For setKeeper script ---");
   console.log(`DEX_ADDRESS=${dexAddress}`);
 }

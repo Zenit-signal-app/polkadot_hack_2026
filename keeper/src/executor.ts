@@ -73,6 +73,12 @@ function isNetworkError(err: unknown): boolean {
   );
 }
 
+function isInvalidTx(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  // Polkadot EVM RPCs often return "Invalid Transaction" for nonce/pool issues.
+  return msg.includes("invalid transaction") || msg.includes("\"code\": 1010");
+}
+
 // ─── Wait for receipt with timeout ───────────────────────────────────────────
 
 async function waitForReceipt(
@@ -245,6 +251,16 @@ async function sendWithRetry(
         if (attempt < retryConfig.maxAttempts) continue;
       }
 
+      // ── "Invalid Transaction" (often pool/nonce related) → re-sync nonce and retry ──
+      if (isInvalidTx(err)) {
+        log.warn(attemptTag, `Invalid transaction – re-syncing nonce and retrying`, { error: errMsg });
+        await nonceManager.resetNonce();
+        if (attempt < retryConfig.maxAttempts) {
+          await sleepWithBackoff(attempt, retryConfig);
+          continue;
+        }
+      }
+
       // ── Underpriced → bump gas and retry with same nonce ──────────────
       if (isUnderpricedTx(err)) {
         log.warn(attemptTag, `Tx underpriced – bumping gas`, { error: errMsg });
@@ -381,6 +397,7 @@ export async function executeOnChainClose(
       );
 
       const tx: ethers.TransactionRequest = {
+        from: wallet.address,
         to: config.perpDexAddress,
         data: txData,
         nonce,
@@ -392,7 +409,7 @@ export async function executeOnChainClose(
               maxPriorityFeePerGas: gasFees.maxPriorityFeePerGas,
               type: 2,
             }
-          : { gasPrice: gasFees.gasPrice }),
+          : { gasPrice: gasFees.gasPrice, type: 0 }),
       };
 
       return tx;
@@ -414,6 +431,7 @@ export async function executeOnChainClose(
         );
 
         const tx: ethers.TransactionRequest = {
+          from: wallet.address,
           to: config.perpDexAddress,
           data: txData,
           nonce,
@@ -425,7 +443,7 @@ export async function executeOnChainClose(
                 maxPriorityFeePerGas: gasFees.maxPriorityFeePerGas,
                 type: 2,
               }
-            : { gasPrice: gasFees.gasPrice }),
+            : { gasPrice: gasFees.gasPrice, type: 0 }),
         };
 
         return tx;
@@ -504,6 +522,7 @@ export async function updateSmartContractWithClosureStats(
       );
 
       return {
+        from: wallet.address,
         to: config.perpDexAddress,
         data: txData,
         nonce,
@@ -515,7 +534,7 @@ export async function updateSmartContractWithClosureStats(
               maxPriorityFeePerGas: gasFees.maxPriorityFeePerGas,
               type: 2,
             }
-          : { gasPrice: gasFees.gasPrice }),
+          : { gasPrice: gasFees.gasPrice, type: 0 }),
       } as ethers.TransactionRequest;
     },
   );
@@ -547,6 +566,7 @@ export async function updateSmartContractWithClosureStats(
       ]);
 
       return {
+        from: wallet.address,
         to: config.perpDexAddress,
         data: txData,
         nonce,
@@ -558,7 +578,7 @@ export async function updateSmartContractWithClosureStats(
               maxPriorityFeePerGas: gasFees.maxPriorityFeePerGas,
               type: 2,
             }
-          : { gasPrice: gasFees.gasPrice }),
+          : { gasPrice: gasFees.gasPrice, type: 0 }),
       } as ethers.TransactionRequest;
     },
   );
@@ -594,6 +614,7 @@ export async function updateSmartContractWithClosureStats(
           const txData = contract.interface.encodeFunctionData("claimKeeperReward", []);
 
           return {
+            from: wallet.address,
             to: config.perpDexAddress,
             data: txData,
             nonce,
@@ -605,7 +626,7 @@ export async function updateSmartContractWithClosureStats(
                   maxPriorityFeePerGas: gasFees.maxPriorityFeePerGas,
                   type: 2,
                 }
-              : { gasPrice: gasFees.gasPrice }),
+              : { gasPrice: gasFees.gasPrice, type: 0 }),
           } as ethers.TransactionRequest;
         },
         { ...DEFAULT_RETRY, maxAttempts: 2 },

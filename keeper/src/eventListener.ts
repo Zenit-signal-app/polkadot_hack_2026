@@ -17,6 +17,7 @@ import { updateSmartContractWithClosureStats } from "./executor.js";
 import { fetchPrices } from "./price.js";
 import { log } from "./logger.js";
 import type { ClosureStats, Market, Order, Side } from "./types.js";
+import { calcLiquidationPrice } from "../../shared/tradeMath.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -61,36 +62,38 @@ function decodeIndexedTopics(eventLog: Log): {
   marketBytes: string | null;
   txHash: string;
   blockNumber: bigint;
+  logIndex: number;
 } {
   const topics = eventLog.topics;
   const userAddress = topics[1]
     ? (`0x${topics[1].slice(26)}` as `0x${string}`)
     : null;
   const marketBytes = topics[2] ?? null;
+  const rawLogIndex: any = (eventLog as any).logIndex;
+  const logIndex =
+    typeof rawLogIndex === "bigint"
+      ? Number(rawLogIndex)
+      : typeof rawLogIndex === "number"
+        ? rawLogIndex
+        : 0;
   return {
     userAddress,
     marketBytes,
     txHash: eventLog.transactionHash ?? "unknown",
     blockNumber: eventLog.blockNumber ?? 0n,
+    logIndex,
   };
 }
 
-function calculateLiquidationPrice(
-  entryPrice: number,
-  leverage: number,
-  side: Side,
-): number {
-  const maintenanceMarginRate = 0.005;
-  if (side === "Long") {
-    return entryPrice * (1 - (1 / leverage) + maintenanceMarginRate);
-  }
-  return entryPrice * (1 + (1 / leverage) - maintenanceMarginRate);
+function estimateLiquidationPrice(entryPrice: number, leverage: number, side: Side): number {
+  const liq = calcLiquidationPrice(side, entryPrice, leverage, config.liquidationMmr);
+  return liq ?? 0;
 }
 
 // ─── Handler: PositionOpened ─────────────────────────────────────────────────
 
 async function handlePositionOpened(eventLog: Log): Promise<void> {
-  const { userAddress, marketBytes, txHash, blockNumber } =
+  const { userAddress, marketBytes, txHash, blockNumber, logIndex } =
     decodeIndexedTopics(eventLog);
   const data = eventLog.data;
 
@@ -120,6 +123,7 @@ async function handlePositionOpened(eventLog: Log): Promise<void> {
     side,
     leverage: `${leverage}x`,
     txHash,
+    logIndex,
     block: blockNumber.toString(),
   });
 
@@ -140,9 +144,7 @@ async function handlePositionOpened(eventLog: Log): Promise<void> {
     });
   }
 
-  const liquidationPrice = entryPrice > 0
-    ? calculateLiquidationPrice(entryPrice, leverage, side)
-    : 0;
+  const liquidationPrice = entryPrice > 0 ? estimateLiquidationPrice(entryPrice, leverage, side) : 0;
 
   try {
     const order = await createOrder({
@@ -154,6 +156,8 @@ async function handlePositionOpened(eventLog: Log): Promise<void> {
       entryPrice,
       liquidationPrice,
       openTxHash: txHash,
+      openEventId: `${txHash}:${logIndex}`,
+      openLogIndex: logIndex,
     });
 
     log.action(TAG, `Order created in DB from PositionOpened event`, {

@@ -64,6 +64,8 @@ export interface CreateOrderInput {
   takeProfitPrice?: number | null;
   stopLossPrice?: number | null;
   openTxHash?: string;
+  openEventId?: string;
+  openLogIndex?: number;
 }
 
 // ─── Price tick from the feed ────────────────────────────────────────────────
@@ -152,4 +154,15 @@ export interface KeeperConfig {
   pollIntervalMs: number;
   pythEndpoint: string;
   apiPort: number;
+  /** Maintenance margin rate used for liquidation estimation (e.g. 0.01 = 1%) */
+  liquidationMmr: number;
+  /** Absolute path to sqlite db file (best-effort) */
+  sqliteDbPath: string | null;
+  /** Backup output directory */
+  backupDir: string;
+  /** Backup interval */
+  backupIntervalMs: number;
+  /** Keep at most N backup files */
+  backupMaxFiles: number;
+  oracleAddress: `0x${string}` | null;
 }

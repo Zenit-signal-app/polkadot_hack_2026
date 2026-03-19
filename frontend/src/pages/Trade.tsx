@@ -14,9 +14,109 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePolkadotPrices, type PolkadotSymbol } from "@/hooks/usePolkadotPrices";
 import { useChartPrice } from "@/hooks/useChartPrice";
 import { calculatePositionPnL, calculateLiquidationPrice, type PnLResult } from "@/utils/tradeMath";
+import { calcTpSlPrices, type TpSlMode } from "@shared/tradeMath";
 import Decimal from "decimal.js";
 
+type KeeperOrder = {
+  id: string;
+  walletAddress: string;
+  market: PolkadotSymbol;
+  status: "Open" | "Closed" | "Filled" | "Liquidated" | "Cancelled";
+  takeProfitPrice: number | null;
+  stopLossPrice: number | null;
+  liquidationPrice: number;
+  updatedAt: string;
+  openedAt?: string;
+  closedAt?: string | null;
+  openTxHash?: string | null;
+  closeTxHash?: string | null;
+};
+
 const POSITION_TYPE = { Long: 0, Short: 1 } as const;
+
+// Keep this conservative: MetaMask shows max fee = gasLimit * maxFeePerGas.
+// A huge gasLimit makes the wallet preview look "very expensive" even if actual gasUsed is much lower.
+const GAS_LIMIT_BUFFER_PCT = 12n;
+const MIN_GAS_LIMIT = 50_000n;
+const MAX_GAS_LIMIT = 800_000n;
+
+async function estimateBufferedGasLimit(
+  publicClient: ReturnType<typeof usePublicClient>,
+  req: Parameters<NonNullable<ReturnType<typeof usePublicClient>>["estimateContractGas"]>[0],
+) {
+  if (!publicClient) return 500_000n;
+  try {
+    const estimated = await publicClient.estimateContractGas(req);
+    const buffered = estimated + (estimated * GAS_LIMIT_BUFFER_PCT) / 100n;
+    if (buffered < MIN_GAS_LIMIT) return MIN_GAS_LIMIT;
+    if (buffered > MAX_GAS_LIMIT) return MAX_GAS_LIMIT;
+    return buffered;
+  } catch {
+    return 500_000n;
+  }
+}
+
+async function estimateBufferedGasLimitWithFloor(
+  publicClient: ReturnType<typeof usePublicClient>,
+  req: Parameters<NonNullable<ReturnType<typeof usePublicClient>>["estimateContractGas"]>[0],
+  floor: bigint,
+  fallback = 500_000n,
+) {
+  const estimated = await estimateBufferedGasLimit(publicClient, req);
+  // Only enforce a floor when estimation looks suspicious (clamped/failed).
+  // Otherwise, keep estimate to avoid inflated wallet "Max fee" previews.
+  const looksClampedOrFallback =
+    estimated === 500_000n || estimated === 0n;
+  if (looksClampedOrFallback) return floor;
+  // Also ensure we don't exceed MAX_GAS_LIMIT even if caller passes a huge floor.
+  if (estimated > MAX_GAS_LIMIT) return MAX_GAS_LIMIT;
+  return estimated || fallback;
+}
+
+const TP_SL_STORAGE_KEY = "zenit_tp_sl";
+
+/** Extract user-friendly error message from tx errors (viem, wallet, etc.). */
+function getTxErrorMessage(e: unknown, fallback: string): string {
+  if (e instanceof Error) {
+    const msg = (e as { shortMessage?: string }).shortMessage ?? e.message;
+    if (msg.includes("Priority is too low")) {
+      return "Gas priority too low. Please try again or increase gas in your wallet.";
+    }
+    if (msg.includes("temporarily banned")) {
+      return "Transaction temporarily banned by RPC node. Switch MetaMask RPC to https://services.polkadothub-rpc.com/testnet/ and wait a few minutes.";
+    }
+    if (msg.includes("Invalid Transaction")) {
+      const details = (e as { details?: string }).details;
+      return details ? `Invalid Transaction (chain rejected): ${details}` : "Invalid Transaction (chain rejected).";
+    }
+    return msg;
+  }
+  return fallback;
+}
+
+function saveTpSlToStorage(wallet: string, market: string, tp: number | null, sl: number | null) {
+  try {
+    const key = `${TP_SL_STORAGE_KEY}:${wallet.toLowerCase()}:${market}`;
+    if (tp == null && sl == null) {
+      localStorage.removeItem(key);
+      return;
+    }
+    localStorage.setItem(key, JSON.stringify({ tp, sl }));
+  } catch {}
+}
+
+
+function getTpSlFromStorage(wallet: string, market: string): { tp: number | null; sl: number | null } | null {
+  try {
+    const key = `${TP_SL_STORAGE_KEY}:${wallet.toLowerCase()}:${market}`;
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const { tp, sl } = JSON.parse(raw);
+    return { tp: tp ?? null, sl: sl ?? null };
+  } catch {
+    return null;
+  }
+}
 
 /** Register TP/SL with keeper. Retries to handle race with PositionOpened. On 404, tries sync first. */
 async function registerTpSlWithKeeper(
@@ -71,6 +171,11 @@ type HistoryEntry = {
   closePrice?: number;
   status: "open" | "closed";
   timestamp: number;
+  openedAt?: number;
+  closedAt?: number;
+  openTxHash?: `0x${string}`;
+  closeTxHash?: `0x${string}`;
+  closeReason?: "Manual close" | "Take profit hit" | "Stop loss hit" | "Liquidation hit";
   fee: number;
   takeProfit: number | null;
   stopLoss: number | null;
@@ -209,6 +314,20 @@ export default function Trade() {
   const [closeAmount, setCloseAmount] = useState("");
   const [activeTab, setActiveTab] = useState<"trade" | "deposit">("trade");
   const [txError, setTxError] = useState<string | null>(null);
+  const [openConfirmedNotice, setOpenConfirmedNotice] = useState<{
+    createdAt: number;
+    walletAddress: string;
+    market: PolkadotSymbol;
+    side: "Long" | "Short";
+    margin: string;
+    leverage: number;
+    entryPrice: number;
+    takeProfit: number | null;
+    stopLoss: number | null;
+    txHash: `0x${string}`;
+  } | null>(null);
+  const [openConfirmedKeeperLogs, setOpenConfirmedKeeperLogs] = useState<string>("");
+  const [openConfirmedKeeperStatus, setOpenConfirmedKeeperStatus] = useState<"idle" | "watching" | "triggered" | "error">("idle");
   const [isDepositing, setIsDepositing] = useState(false);
 
   const [chartSymbol, setChartSymbol] = useState<PolkadotSymbol>("BTCUSD");
@@ -257,7 +376,16 @@ export default function Trade() {
       return;
     }
     skipNextSaveRef.current = true;
-    setTradeHistory(loadFromStorage<HistoryEntry[]>("tradeHistory", []));
+    setTradeHistory(
+      loadFromStorage<HistoryEntry[]>("tradeHistory", []).map((entry) => ({
+        ...entry,
+        openedAt: entry.openedAt ?? entry.timestamp,
+        closedAt: entry.closedAt ?? (entry.status === "closed" ? entry.timestamp : undefined),
+        closeReason:
+          entry.closeReason ??
+          (entry.status === "closed" && entry.action === "close" ? "Manual close" : undefined),
+      })),
+    );
     setDepositHistory(loadFromStorage<Array<{ id: string; amount: number; timestamp: number }>>("depositHistory", []));
     setWithdrawHistory(loadFromStorage<Array<{ id: string; amount: number; timestamp: number }>>("withdrawHistory", []));
     queueMicrotask(() => { skipNextSaveRef.current = false; });
@@ -307,6 +435,25 @@ export default function Trade() {
     refetchEth();
     refetchDot();
   }, [refetchBtc, refetchEth, refetchDot]);
+
+  const resetBrowserCacheForUser = useCallback(() => {
+    if (!address) return;
+    // Clear ONLY "cache" used for syncing open positions / TP-SL.
+    // Do NOT clear order history (tradeHistory/depositHistory/withdrawHistory).
+    try {
+      for (const sym of POLKADOT_SYMBOLS) {
+        localStorage.removeItem(`${TP_SL_STORAGE_KEY}:${address.toLowerCase()}:${sym}`);
+      }
+    } catch {}
+
+    setKeeperOpenOrders([]);
+    setKeeperOrdersAll([]);
+    syncedPositionsRef.current.clear();
+
+    // Force a fresh on-chain + keeper sync (UI will keep showing history).
+    refetchPositions();
+    refetchDexBalance();
+  }, [address, refetchPositions, refetchDexBalance]);
   const positionsBySymbol = useMemo(
     () => ({
       BTCUSD: positionBtc as PositionData | undefined,
@@ -351,6 +498,67 @@ export default function Trade() {
 
   const waitOptions = useMemo(() => ({ confirmations: 0 }), []);
 
+  const copyText = useCallback(async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {}
+  }, []);
+
+  const formatKeeperLogLine = useCallback((row: any) => {
+    const meta = row?.meta ? ` ${JSON.stringify(row.meta)}` : "";
+    return `${row.ts} ${row.level} [${row.tag}] ${row.msg}${meta}`;
+  }, []);
+
+  // After openPosition confirm: watch keeper logs until TP/SL/Liq triggers (best-effort).
+  useEffect(() => {
+    if (!openConfirmedNotice) return;
+    const base = KEEPER_URL.replace(/\/$/, "");
+    let cancelled = false;
+    setOpenConfirmedKeeperStatus("watching");
+    setOpenConfirmedKeeperLogs("");
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`${base}/logs/recent?limit=120`);
+        const rows = (await res.json()) as Array<any>;
+        if (cancelled) return;
+
+        const walletLower = openConfirmedNotice.walletAddress.toLowerCase();
+        const market = openConfirmedNotice.market;
+
+        const relevant = rows.filter((r) => {
+          const m = r?.meta ?? {};
+          const msg = String(r?.msg ?? "");
+          return (
+            String(m?.walletAddress ?? "").toLowerCase() === walletLower &&
+            String(m?.market ?? "") === market &&
+            msg.toLowerCase().includes("triggered")
+          );
+        });
+
+        // Always show latest logs snapshot (helps user copy diagnostic info)
+        setOpenConfirmedKeeperLogs(rows.slice(-60).map(formatKeeperLogLine).join("\n"));
+
+        if (relevant.length > 0) {
+          setOpenConfirmedKeeperStatus("triggered");
+          return; // stop polling on first trigger match
+        }
+      } catch {
+        if (!cancelled) setOpenConfirmedKeeperStatus("error");
+      }
+    };
+
+    const interval = setInterval(poll, 5000);
+    poll();
+    const timeout = setTimeout(() => { clearInterval(interval); }, 10 * 60 * 1000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, [openConfirmedNotice, formatKeeperLogLine]);
+
   const captureTxFee = useCallback(
     async (txPromise: Promise<`0x${string}` | undefined>): Promise<number> => {
       if (!publicClient) throw new Error("No public client");
@@ -379,12 +587,26 @@ export default function Trade() {
     const amount = parseUnits(depositAmount, 18);
     const depositValue = Number(depositAmount);
     try {
-      const approveHash = await approveTokenAsync({ address: CONTRACTS.TOKEN, abi: ERC20_ABI, functionName: "approve", args: [CONTRACTS.DEX, amount] });
+      const gasLimit = await estimateBufferedGasLimitWithFloor(publicClient, {
+        address: CONTRACTS.TOKEN,
+        abi: ERC20_ABI,
+        functionName: "approve",
+        args: [CONTRACTS.DEX, amount],
+        account: address,
+      }, 80_000n, 120_000n);
+      const approveHash = await approveTokenAsync({ address: CONTRACTS.TOKEN, abi: ERC20_ABI, functionName: "approve", args: [CONTRACTS.DEX, amount], gas: gasLimit });
       if (approveHash) {
         const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash, ...waitOptions });
         if (isTxReverted(approveReceipt.status)) throw new Error("Approve failed on-chain");
       }
-      const hash = await depositAsync({ address: CONTRACTS.DEX, abi: PERPETUAL_DEX_ABI, functionName: "deposit", args: [amount] });
+      const depositGasLimit = await estimateBufferedGasLimitWithFloor(publicClient, {
+        address: CONTRACTS.DEX,
+        abi: PERPETUAL_DEX_ABI,
+        functionName: "deposit",
+        args: [amount],
+        account: address,
+      }, 220_000n, 300_000n);
+      const hash = await depositAsync({ address: CONTRACTS.DEX, abi: PERPETUAL_DEX_ABI, functionName: "deposit", args: [amount], gas: depositGasLimit });
       if (!hash) throw new Error("Deposit transaction was not sent");
       const receipt = await publicClient.waitForTransactionReceipt({ hash, ...waitOptions });
       if (isTxReverted(receipt.status)) throw new Error("Deposit failed on-chain");
@@ -397,7 +619,7 @@ export default function Trade() {
       }
       refetchDexBalance();
     } catch (e) {
-      setTxError(e instanceof Error ? e.message : "Deposit failed");
+      setTxError(getTxErrorMessage(e, "Deposit failed"));
     } finally {
       setIsDepositing(false);
       releaseTxLock("deposit");
@@ -411,7 +633,15 @@ export default function Trade() {
     setIsWithdrawing(true);
     const withdrawValue = Number(withdrawAmount);
     try {
-      const hash = await withdrawAsync({ address: CONTRACTS.DEX, abi: PERPETUAL_DEX_ABI, functionName: "withdraw", args: [parseUnits(withdrawAmount, 18)] });
+      const withdrawArg = parseUnits(withdrawAmount, 18);
+      const gasLimit = await estimateBufferedGasLimitWithFloor(publicClient, {
+        address: CONTRACTS.DEX,
+        abi: PERPETUAL_DEX_ABI,
+        functionName: "withdraw",
+        args: [withdrawArg],
+        account: address,
+      }, 220_000n, 300_000n);
+      const hash = await withdrawAsync({ address: CONTRACTS.DEX, abi: PERPETUAL_DEX_ABI, functionName: "withdraw", args: [withdrawArg], gas: gasLimit });
       if (!hash) throw new Error("Withdraw transaction was not sent");
       const receipt = await publicClient.waitForTransactionReceipt({ hash, ...waitOptions });
       if (isTxReverted(receipt.status)) throw new Error("Withdraw failed on-chain");
@@ -424,7 +654,7 @@ export default function Trade() {
       }
       refetchDexBalance();
     } catch (e) {
-      setTxError(e instanceof Error ? e.message : "Withdraw failed");
+      setTxError(getTxErrorMessage(e, "Withdraw failed"));
     } finally {
       setIsWithdrawing(false);
       releaseTxLock("withdraw");
@@ -433,6 +663,7 @@ export default function Trade() {
 
   const handleOpenPosition = async () => {
     if (!positionAmount) return;
+    if (!address || !publicClient) return;
     if (!acquireTxLock("openPosition")) return;
     setTxError(null);
     const amountStr = positionAmount;
@@ -449,15 +680,27 @@ export default function Trade() {
     const volume = parsedAmount * leverage;
     setIsSubmittingPosition(true);
     try {
-      const txFee = await captureTxFee(
-        openPosAsync({
-          address: CONTRACTS.DEX,
-          abi: PERPETUAL_DEX_ABI,
-          functionName: "openPosition",
-          args: [symbolToBytes32(chartSymbol), parseUnits(amountStr, 18), POSITION_TYPE[positionType], leverage],
-          gas: 500000n,
-        }),
-      );
+      const openArgs = [symbolToBytes32(chartSymbol), parseUnits(amountStr, 18), POSITION_TYPE[positionType], leverage] as const;
+      const gasLimit = await estimateBufferedGasLimitWithFloor(publicClient, {
+        address: CONTRACTS.DEX,
+        abi: PERPETUAL_DEX_ABI,
+        functionName: "openPosition",
+        args: openArgs,
+        account: address,
+      }, 120_000n, 220_000n);
+      const txHash = await openPosAsync({
+        address: CONTRACTS.DEX,
+        abi: PERPETUAL_DEX_ABI,
+        functionName: "openPosition",
+        args: openArgs,
+        gas: gasLimit,
+      });
+      if (!txHash) throw new Error("Transaction was not sent");
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash, ...waitOptions });
+      if (isTxReverted(receipt.status)) throw new Error("Open position reverted on-chain");
+      const gasUsed = receipt.gasUsed ?? 0n;
+      const gasPrice = receipt.effectiveGasPrice ?? 0n;
+      const txFee = gasUsed === 0n || gasPrice === 0n ? 0 : Number(formatUnits(gasUsed * gasPrice, 18));
       if (priceSnapshot) setEntryPrice(priceSnapshot);
       const newEntry: HistoryEntry = {
         id: crypto.randomUUID?.() ?? `${Date.now()}-open`,
@@ -469,6 +712,8 @@ export default function Trade() {
         entryPrice: entryPriceValue,
         status: "open",
         timestamp: Date.now(),
+        openedAt: Date.now(),
+        openTxHash: txHash,
         fee: txFee,
         takeProfit: previewTakeProfitPrice ?? null,
         stopLoss: previewStopLossPrice ?? null,
@@ -478,16 +723,28 @@ export default function Trade() {
       refetchPositions();
       refetchDexBalance();
 
-      // Register TP/SL with keeper service (non-blocking, retries on race with PositionOpened)
-      registerTpSlWithKeeper(
-        address!,
-        chartSymbol,
-        previewTakeProfitPrice ?? null,
-        previewStopLossPrice ?? null,
-      ).catch(() => {});
+      // UI notification: confirmed openPosition + copyable info
+      setOpenConfirmedNotice({
+        createdAt: Date.now(),
+        walletAddress: address!,
+        market: chartSymbol,
+        side: positionType,
+        margin: amountStr,
+        leverage,
+        entryPrice: entryPriceValue,
+        takeProfit: previewTakeProfitPrice ?? null,
+        stopLoss: previewStopLossPrice ?? null,
+        txHash,
+      });
+
+      // Register TP/SL with keeper + persist for sync after refresh
+      const tp = previewTakeProfitPrice ?? null;
+      const sl = previewStopLossPrice ?? null;
+      saveTpSlToStorage(address!, chartSymbol, tp, sl);
+      registerTpSlWithKeeper(address!, chartSymbol, tp, sl).catch(() => {});
     } catch (e) {
       setPositionAmount(amountStr);
-      setTxError(e instanceof Error ? e.message : "Open position failed");
+      setTxError(getTxErrorMessage(e, "Open position failed"));
     } finally {
       setIsSubmittingPosition(false);
       releaseTxLock("openPosition");
@@ -512,13 +769,21 @@ export default function Trade() {
     const volume = parsedAmount * leverage;
     setIsSubmittingPosition(true);
     try {
+      const incArgs = [symbolToBytes32(chartSymbol), parseUnits(amountStr, 18)] as const;
+      const gasLimit = await estimateBufferedGasLimitWithFloor(publicClient, {
+        address: CONTRACTS.DEX,
+        abi: PERPETUAL_DEX_ABI,
+        functionName: "increasePosition",
+        args: incArgs,
+        account: address,
+      }, 200_000n, 320_000n);
       const txFee = await captureTxFee(
         increasePosAsync({
           address: CONTRACTS.DEX,
           abi: PERPETUAL_DEX_ABI,
           functionName: "increasePosition",
-          args: [symbolToBytes32(chartSymbol), parseUnits(amountStr, 18)],
-          gas: 400000n,
+          args: incArgs,
+          gas: gasLimit,
         }),
       );
       setPositionAmount("");
@@ -533,6 +798,7 @@ export default function Trade() {
         entryPrice: entryPriceValue,
         status: "open",
         timestamp: Date.now(),
+        openedAt: Date.now(),
         fee: txFee,
         takeProfit: previewTakeProfitPrice ?? null,
         stopLoss: previewStopLossPrice ?? null,
@@ -542,17 +808,16 @@ export default function Trade() {
       refetchPositions();
       refetchDexBalance();
 
-      // Register TP/SL with keeper when increasing (update existing order)
-      if ((previewTakeProfitPrice ?? null) !== null || (previewStopLossPrice ?? null) !== null) {
-        registerTpSlWithKeeper(
-          address!,
-          chartSymbol,
-          previewTakeProfitPrice ?? null,
-          previewStopLossPrice ?? null,
-        ).catch(() => {});
+      // Register TP/SL with keeper when increasing + persist
+      const tp = previewTakeProfitPrice ?? null;
+      const sl = previewStopLossPrice ?? null;
+      if (tp !== null || sl !== null) {
+        saveTpSlToStorage(address!, chartSymbol, tp, sl);
+        registerTpSlWithKeeper(address!, chartSymbol, tp, sl).catch(() => {});
       }
-    } catch {
+    } catch (e) {
       setPositionAmount(amountStr);
+      setTxError(getTxErrorMessage(e, "Increase position failed"));
     } finally {
       setIsSubmittingPosition(false);
       releaseTxLock("increasePosition");
@@ -575,12 +840,20 @@ export default function Trade() {
     const currentPosType = posTypeStr === "-" ? "N/A" : (posTypeStr as "Long" | "Short");
 
     try {
+      const closeArgs = [symbolToBytes32(market), parseUnits(amountValue, 18)] as const;
+      const gasLimit = await estimateBufferedGasLimitWithFloor(publicClient, {
+        address: CONTRACTS.DEX,
+        abi: PERPETUAL_DEX_ABI,
+        functionName: "closePosition",
+        args: closeArgs,
+        account: address,
+      }, 320_000n, 450_000n);
       const txHash = await closePosAsync({
         address: CONTRACTS.DEX,
         abi: PERPETUAL_DEX_ABI,
         functionName: "closePosition",
-        args: [symbolToBytes32(market), parseUnits(amountValue, 18)],
-        gas: 400000n,
+        args: closeArgs,
+        gas: gasLimit,
       });
       if (!txHash) throw new Error("Transaction was not sent");
 
@@ -625,6 +898,7 @@ export default function Trade() {
             const updatedHistory: HistoryEntry[] = prev.map((entry) => {
               if (!replaced && entry.status === "open" && (entry.symbol === market || !entry.symbol)) {
                 replaced = true;
+                const now = Date.now();
                 return {
                   ...entry,
                   action: "close",
@@ -633,7 +907,11 @@ export default function Trade() {
                   entryPrice: entryPriceValue,
                   closePrice: finalClosePrice,
                   status: "closed",
-                  timestamp: Date.now(),
+                  timestamp: now,
+                  openedAt: entry.openedAt ?? entry.timestamp,
+                  closedAt: now,
+                  closeTxHash: txHash as `0x${string}`,
+                  closeReason: "Manual close",
                   fee: txFee,
                   takeProfit: previewTakeProfitPrice ?? null,
                   stopLoss: previewStopLossPrice ?? null,
@@ -643,6 +921,7 @@ export default function Trade() {
               return entry;
             });
             if (!replaced) {
+              const now = Date.now();
               return [{
                 id: closeId,
                 symbol: market,
@@ -653,7 +932,11 @@ export default function Trade() {
                 entryPrice: entryPriceValue,
                 closePrice: finalClosePrice,
                 status: "closed",
-                timestamp: Date.now(),
+                timestamp: now,
+                openedAt: now,
+                closedAt: now,
+                closeTxHash: txHash as `0x${string}`,
+                closeReason: "Manual close",
                 fee: txFee,
                 takeProfit: previewTakeProfitPrice ?? null,
                 stopLoss: previewStopLossPrice ?? null,
@@ -663,6 +946,7 @@ export default function Trade() {
             return updatedHistory;
           });
 
+          saveTpSlToStorage(address!, market, null, null);
           refetchPositions();
           refetchDexBalance();
         })
@@ -674,7 +958,7 @@ export default function Trade() {
         });
     } catch (e) {
       if (!amountOverride) setCloseAmount(amountValue);
-      setTxError(e instanceof Error ? e.message : "Close position failed");
+      setTxError(getTxErrorMessage(e, "Close position failed"));
       setIsClosingPosition(false);
       releaseTxLock("closePosition");
     } finally {
@@ -720,6 +1004,9 @@ export default function Trade() {
   const [entryPrice, setEntryPrice] = useState<number | null>(null);
   const [targetPercent, setTargetPercent] = useState(5);
   const [stopLossPercent, setStopLossPercent] = useState(2);
+  const [tpSlMode, setTpSlMode] = useState<TpSlMode>("roi");
+  const [keeperOpenOrders, setKeeperOpenOrders] = useState<KeeperOrder[]>([]);
+  const [keeperOrdersAll, setKeeperOrdersAll] = useState<KeeperOrder[]>([]);
   const [previewLiquidationPrice, setPreviewLiquidationPrice] = useState<number | null>(null);
   const [previewTakeProfitPrice, setPreviewTakeProfitPrice] = useState<number | null>(null);
   const [previewStopLossPrice, setPreviewStopLossPrice] = useState<number | null>(null);
@@ -805,25 +1092,270 @@ export default function Trade() {
   }, [closeAmount, positionAmount, leverage, pos?.leverage]);
   const prevHasPosition = useRef<boolean>(hasPosition);
 
-  // Sync all open positions with keeper when TP/SL set (e.g. opened before keeper started)
+  // Sync all open positions with keeper when TP/SL set (from tradeHistory or localStorage)
   const syncedPositionsRef = useRef<Set<string>>(new Set());
+  const prevOnChainAmountsRef = useRef<Record<PolkadotSymbol, bigint>>({} as Record<PolkadotSymbol, bigint>);
   useEffect(() => {
     if (!address) return;
+
+    // If an on-chain position was previously open but is now gone, mark the latest "open" UI history entry
+    // as closed so the UI doesn't keep showing a stale "Open" row.
+    const closedSymbols: PolkadotSymbol[] = [];
+    for (const sym of POLKADOT_SYMBOLS) {
+      const prevAmt = prevOnChainAmountsRef.current[sym] ?? 0n;
+      const curAmt = positionsBySymbol[sym]?.amount ?? 0n;
+      if (prevAmt > 0n && curAmt <= 0n) closedSymbols.push(sym);
+      prevOnChainAmountsRef.current[sym] = curAmt;
+    }
+    if (closedSymbols.length) {
+      const prices = chartPricesRef.current;
+      setTradeHistory((prev): HistoryEntry[] => {
+        let mutated = false;
+        let next = prev;
+        for (const sym of closedSymbols) {
+          let replaced = false;
+          next = next.map((entry) => {
+            if (
+              !replaced &&
+              entry.status === "open" &&
+              (entry.symbol === sym || !entry.symbol)
+            ) {
+              replaced = true;
+              mutated = true;
+              const closePrice = prices[sym] ?? getPriceRef.current(sym)?.price ?? null;
+              const now = Date.now();
+              return {
+                ...entry,
+                action: "close",
+                status: "closed",
+                closePrice: closePrice && closePrice > 0 ? closePrice : (entry.closePrice ?? undefined),
+                timestamp: now,
+                openedAt: entry.openedAt ?? entry.timestamp,
+                closedAt: now,
+              };
+            }
+            return entry;
+          });
+        }
+        return mutated ? next : prev;
+      });
+    }
+
     for (const sym of POLKADOT_SYMBOLS) {
       const pos = positionsBySymbol[sym];
-      if (!pos || pos.amount <= 0n) continue;
+      if (!pos || pos.amount <= 0n) {
+        syncedPositionsRef.current.delete(`${address.toLowerCase()}:${sym}`);
+        saveTpSlToStorage(address, sym, null, null);
+        continue;
+      }
       const key = `${address.toLowerCase()}:${sym}`;
       if (syncedPositionsRef.current.has(key)) continue;
       const openEntry = tradeHistory.find(
         (e) => e.status === "open" && (e.symbol === sym || !e.symbol),
       );
-      const tp = openEntry?.takeProfit ?? null;
-      const sl = openEntry?.stopLoss ?? null;
+      let tp = openEntry?.takeProfit ?? null;
+      let sl = openEntry?.stopLoss ?? null;
+      if (tp == null && sl == null) {
+        const stored = getTpSlFromStorage(address, sym);
+        if (stored) {
+          tp = stored.tp;
+          sl = stored.sl;
+        }
+      }
       if (tp == null && sl == null) continue;
       syncedPositionsRef.current.add(key);
       registerTpSlWithKeeper(address, sym, tp, sl).catch(() => {});
     }
   }, [address, positionsBySymbol, tradeHistory]);
+
+  // Keep UI TP/SL/Liq aligned with keeper by polling open orders.
+  useEffect(() => {
+    if (!address) {
+      setKeeperOpenOrders([]);
+      return;
+    }
+    const base = KEEPER_URL.replace(/\/$/, "");
+    let stopped = false;
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`${base}/orders?status=Open&limit=500`);
+        if (!res.ok) return;
+        const data = (await res.json()) as unknown;
+        if (stopped || !Array.isArray(data)) return;
+        const normalized = address.toLowerCase();
+        const mine = (data as KeeperOrder[]).filter(
+          (o) => o && typeof o.walletAddress === "string" && o.walletAddress.toLowerCase() === normalized,
+        );
+        setKeeperOpenOrders(mine);
+      } catch {
+        // non-fatal
+      }
+    };
+
+    poll();
+    const timer = setInterval(poll, 5000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [address]);
+
+  // Keep history timestamps aligned across devices by polling keeper orders (all statuses).
+  useEffect(() => {
+    if (!address) {
+      setKeeperOrdersAll([]);
+      return;
+    }
+    const base = KEEPER_URL.replace(/\/$/, "");
+    let stopped = false;
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`${base}/orders?limit=500`);
+        if (!res.ok) return;
+        const data = (await res.json()) as unknown;
+        if (stopped || !Array.isArray(data)) return;
+        const normalized = address.toLowerCase();
+        const mine = (data as KeeperOrder[]).filter(
+          (o) => o && typeof o.walletAddress === "string" && o.walletAddress.toLowerCase() === normalized,
+        );
+        setKeeperOrdersAll(mine);
+      } catch {
+        // non-fatal
+      }
+    };
+
+    poll();
+    const timer = setInterval(poll, 8000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [address]);
+
+  // Backfill close reason for non-manual closes using keeper order status.
+  useEffect(() => {
+    if (keeperOrdersAll.length === 0) return;
+    setTradeHistory((prev) => {
+      let changed = false;
+      const next = prev.map((e) => {
+        if (e.status !== "closed") return e;
+        if (e.closeReason) return e;
+        if (e.action === "close") return { ...e, closeReason: "Manual close" as const };
+
+        const match =
+          (e.openTxHash
+            ? keeperOrdersAll.find((o) => (o.openTxHash ?? "").toLowerCase() === e.openTxHash!.toLowerCase())
+            : null) ??
+          (e.closeTxHash
+            ? keeperOrdersAll.find((o) => (o.closeTxHash ?? "").toLowerCase() === e.closeTxHash!.toLowerCase())
+            : null) ??
+          null;
+
+        if (!match) return e;
+
+        const reason =
+          match.status === "Filled"
+            ? ("Take profit hit" as const)
+            : match.status === "Liquidated"
+              ? ("Liquidation hit" as const)
+              : match.status === "Closed"
+                ? ("Stop loss hit" as const)
+                : null;
+
+        if (!reason) return e;
+        changed = true;
+        return { ...e, closeReason: reason };
+      });
+      return changed ? next : prev;
+    });
+  }, [keeperOrdersAll]);
+
+  // When keeper auto-closes a position for this wallet, ask UI to reset caches.
+  useEffect(() => {
+    if (!address) return;
+    const base = KEEPER_URL.replace(/\/$/, "");
+    let stopped = false;
+    let lastResetAt = 0;
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`${base}/cache/reset?wallet=${encodeURIComponent(address)}`);
+        if (!res.ok) return;
+        const data = (await res.json()) as any;
+        if (stopped) return;
+        const resetAt = Number(data?.lastResetAt ?? 0);
+        if (!Number.isFinite(resetAt) || resetAt <= 0) return;
+        if (lastResetAt === 0) {
+          lastResetAt = resetAt;
+          return;
+        }
+        if (resetAt > lastResetAt) {
+          lastResetAt = resetAt;
+          resetBrowserCacheForUser();
+        }
+      } catch {
+        // non-fatal
+      }
+    };
+
+    poll();
+    const timer = setInterval(poll, 5000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [address, resetBrowserCacheForUser]);
+
+  // Reconcile local "open" history with keeper closures (fix stale Open Positions UI).
+  useEffect(() => {
+    if (!address) return;
+    if (keeperOrdersAll.length === 0) return;
+    const normalized = address.toLowerCase();
+
+    const statusToReason = (s: KeeperOrder["status"]) => {
+      if (s === "Filled") return "Take profit hit" as const;
+      if (s === "Liquidated") return "Liquidation hit" as const;
+      if (s === "Closed") return "Stop loss hit" as const;
+      return null;
+    };
+
+    setTradeHistory((prev) => {
+      let changed = false;
+      const next = prev.map((e) => {
+        if (e.status !== "open") return e;
+        if (!e.openTxHash) return e;
+
+        const match = keeperOrdersAll.find(
+          (o) =>
+            (o.openTxHash ?? "").toLowerCase() === e.openTxHash!.toLowerCase() &&
+            String(o.walletAddress ?? "").toLowerCase() === normalized,
+        );
+
+        if (!match) return e;
+        if (match.status === "Open") return e;
+
+        const reason = statusToReason(match.status);
+        const closedAtMs =
+          match.closedAt != null && match.closedAt.length > 0 ? Date.parse(match.closedAt) : NaN;
+        const ts = Number.isFinite(closedAtMs) ? closedAtMs : Date.now();
+
+        changed = true;
+        return {
+          ...e,
+          action: "close" as const,
+          status: "closed" as const,
+          timestamp: ts,
+          openedAt: e.openedAt ?? e.timestamp,
+          closedAt: ts,
+          closeTxHash: (match.closeTxHash as `0x${string}` | undefined) ?? e.closeTxHash,
+          closeReason: reason ?? e.closeReason,
+        };
+      });
+      return changed ? next : prev;
+    });
+  }, [address, keeperOrdersAll]);
   useEffect(() => {
     if (prevHasPosition.current && !hasPosition) {
       setLeverage(2);
@@ -899,23 +1431,23 @@ export default function Trade() {
         };
       }
       const safeLeverage = Math.max(1, leverageValue);
-      const liquidationPrice =
-        side === "Long"
-          ? price * (1 - 0.9 / safeLeverage)
-          : price * (1 + 0.9 / safeLeverage);
-      const tpDelta = tpPercentage / 100 / safeLeverage;
-      const slDelta = slPercentage / 100 / safeLeverage;
-      const takeProfitPrice =
-        side === "Long" ? price * (1 + tpDelta) : price * Math.max(0, 1 - tpDelta);
-      const stopLossPrice =
-        side === "Long" ? price * Math.max(0, 1 - slDelta) : price * (1 + slDelta);
+      // Keep liquidation consistent with our PnL model (MMR=1%).
+      const liquidationPrice = Number(calculateLiquidationPrice(side, price, safeLeverage, 0.01));
+      const { takeProfitPrice, stopLossPrice } = calcTpSlPrices(
+        side,
+        price,
+        safeLeverage,
+        tpPercentage,
+        slPercentage,
+        tpSlMode,
+      );
       return {
         liquidationPrice,
         takeProfitPrice,
         stopLossPrice,
       };
     },
-    []
+    [tpSlMode]
   );
 
   useEffect(() => {
@@ -961,9 +1493,13 @@ export default function Trade() {
       lines.push({ name, price, color, lineStyle, labelAlign, lineWidth });
     };
     addLine("Entry Price", effectiveEntryPrice, "#ffffff", 0, "top", 0.5);
-    addLine("Liquidation", previewLiquidationPrice, "#ef4444", 1, "bottom", 1);
-    addLine("Take Profit", previewTakeProfitPrice, "#22c55e", 1, "top", 1);
-    addLine("Stop Loss", previewStopLossPrice, "#eab308", 1, "bottom", 1);
+    const keeperForSymbol = keeperOpenOrders.find((o) => o.market === chartSymbol && o.status === "Open");
+    const liq = keeperForSymbol?.liquidationPrice ?? previewLiquidationPrice;
+    const tp = keeperForSymbol?.takeProfitPrice ?? previewTakeProfitPrice;
+    const sl = keeperForSymbol?.stopLossPrice ?? previewStopLossPrice;
+    addLine("Liquidation", liq, "#ef4444", 1, "bottom", 1);
+    addLine("Take Profit", tp, "#22c55e", 1, "top", 1);
+    addLine("Stop Loss", sl, "#eab308", 1, "bottom", 1);
     return lines.length > 0 ? lines : undefined;
   }, [
     hasPosition,
@@ -971,6 +1507,8 @@ export default function Trade() {
     previewLiquidationPrice,
     previewTakeProfitPrice,
     previewStopLossPrice,
+    keeperOpenOrders,
+    chartSymbol,
   ]);
 
   const historyTabOptions = [
@@ -1091,10 +1629,29 @@ export default function Trade() {
 
   const renderHistoryEntry = (entry: HistoryEntry) => {
     const entrySymbol = entry.symbol ?? chartSymbol;
+    const keeperForSymbol = keeperOpenOrders.find((o) => o.market === entrySymbol && o.status === "Open");
+    const keeperForTime =
+      (entry.openTxHash
+        ? keeperOrdersAll.find((o) => (o.openTxHash ?? "").toLowerCase() === entry.openTxHash!.toLowerCase())
+        : null) ??
+      (entry.closeTxHash
+        ? keeperOrdersAll.find((o) => (o.closeTxHash ?? "").toLowerCase() === entry.closeTxHash!.toLowerCase())
+        : null) ??
+      null;
+    const keeperOpenedAtMs = keeperForTime?.openedAt ? Date.parse(keeperForTime.openedAt) : NaN;
+    const keeperClosedAtMs = keeperForTime?.closedAt ? Date.parse(keeperForTime.closedAt) : NaN;
     const currentPrice = chartPricesBySymbol[entrySymbol];
     const pnlValue = calculatePnL(entry, currentPrice);
     const sizeValue = entry.volume ?? Number(entry.amount) * entry.leverage;
-    const closeTimestamp = entry.status === "closed" ? formatTimestamp(entry.timestamp) : "Open";
+    const openTimestamp = formatTimestamp(
+      Number.isFinite(keeperOpenedAtMs) ? keeperOpenedAtMs : (entry.openedAt ?? entry.timestamp),
+    );
+    const closeTimestamp =
+      entry.status === "closed"
+        ? formatTimestamp(
+            Number.isFinite(keeperClosedAtMs) ? keeperClosedAtMs : (entry.closedAt ?? entry.timestamp),
+          )
+        : "Open";
     const pnlClass =
       pnlValue == null ? "text-slate-400" : pnlValue >= 0 ? "text-emerald-400" : "text-rose-400";
     const priceTextColor =
@@ -1103,8 +1660,16 @@ export default function Trade() {
         : currentPrice > entry.entryPrice
         ? "text-emerald-400"
         : "text-rose-400";
-    const liqPriceStr = calculateLiquidationPrice(entry.type === "N/A" ? "Long" : entry.type, entry.entryPrice, entry.leverage);
-    const liqPriceValue = Number(liqPriceStr);
+    const liqPriceValue =
+      entry.status === "open" && keeperForSymbol?.liquidationPrice != null
+        ? keeperForSymbol.liquidationPrice
+        : Number(
+            calculateLiquidationPrice(
+              entry.type === "N/A" ? "Long" : entry.type,
+              entry.entryPrice,
+              entry.leverage,
+            ),
+          );
     const liqDistancePct =
       currentPrice == null || liqPriceValue === 0 ? Number.POSITIVE_INFINITY : Math.abs(currentPrice - liqPriceValue) / liqPriceValue;
     const isLiqNear = liqDistancePct <= 0.05;
@@ -1126,21 +1691,36 @@ export default function Trade() {
         <div className="flex flex-nowrap gap-3 text-[11px] sm:text-[12px]">
           {[
             ["Market", entrySymbol],
-            ["Time", formatTimestamp(entry.timestamp)],
+            ["Open Time", openTimestamp],
             ["Position", entry.type],
             ["Entry", formatForSymbol(entry.entryPrice, entrySymbol)],
             ["Price", currentPrice != null ? formatForSymbol(currentPrice, entrySymbol) : "—"],
-            ["Liq. Price", isNaN(Number(liqPriceStr)) ? "—" : formatCurrency(Number(liqPriceStr))],
+            ["Liq. Price", !liqPriceValue || Number.isNaN(liqPriceValue) ? "—" : formatCurrency(liqPriceValue)],
             ["Margin", formatZUSDCNumber(Number(entry.amount))],
             ["Leverage", `${entry.leverage}x`],
             ["Size", formatCurrency(sizeValue)],
             ["Exc Fee", formatCurrency(entry.fee)],
             ["PnL", pnlValue == null ? "—" : formatCurrency(pnlValue)],
-            ["Take Profit", formatForSymbol(entry.takeProfit, entrySymbol)],
-            ["Stop Loss", formatForSymbol(entry.stopLoss, entrySymbol)],
+            [
+              "Take Profit",
+              entry.status === "open"
+                ? formatForSymbol(keeperForSymbol?.takeProfitPrice ?? entry.takeProfit, entrySymbol)
+                : formatForSymbol(entry.takeProfit, entrySymbol),
+            ],
+            [
+              "Stop Loss",
+              entry.status === "open"
+                ? formatForSymbol(keeperForSymbol?.stopLossPrice ?? entry.stopLoss, entrySymbol)
+                : formatForSymbol(entry.stopLoss, entrySymbol),
+            ],
+            ["Close Reason", entry.status === "closed" ? (entry.closeReason ?? "—") : "—"],
+            [
+              "Close Time",
+              closeTimestamp,
+            ],
             [
               "Status",
-              entry.status === "open" ? "Open" : `Closed · ${closeTimestamp}`,
+              entry.status === "open" ? "Open" : "Closed",
             ],
           ].map(([label, value]) => {
             const statusClass =
@@ -1163,7 +1743,29 @@ export default function Trade() {
             );
           })}
           {entry.status === "open" && (
-            <div className="flex min-w-[40px] flex-none flex-col justify-end">
+            <div className="flex min-w-[40px] flex-none flex-col justify-end gap-1">
+              {(entry.takeProfit != null || entry.stopLoss != null) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    registerTpSlWithKeeper(
+                      address!,
+                      (entry.symbol ?? chartSymbol) as PolkadotSymbol,
+                      keeperForSymbol?.takeProfitPrice ?? entry.takeProfit ?? null,
+                      keeperForSymbol?.stopLossPrice ?? entry.stopLoss ?? null,
+                    ).then(() => {
+                      setTxError(null);
+                    }).catch((e) => {
+                      setTxError(e instanceof Error ? e.message : "Sync TP/SL failed");
+                    });
+                  }}
+                  className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/20 text-amber-400 transition hover:bg-amber-500 hover:text-white"
+                  title="Sync TP/SL with keeper"
+                  aria-label="Sync TP/SL"
+                >
+                  <span className="text-xs font-bold">↻</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setCloseConfirmEntry(entry)}
@@ -1753,6 +2355,77 @@ export default function Trade() {
                 </button>
               </div>
 
+              {openConfirmedNotice && (
+                <div className="mt-3 rounded-2xl border border-[#2c2f45] bg-[#0a0c17] px-4 py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-white">Order confirmed on-chain</p>
+                      <p className="mt-0.5 text-xs text-slate-400">
+                        Keeper trigger logs:{" "}
+                        <span className="font-mono">
+                          {openConfirmedKeeperStatus === "watching" ? "watching…" : openConfirmedKeeperStatus}
+                        </span>
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOpenConfirmedNotice(null);
+                        setOpenConfirmedKeeperLogs("");
+                        setOpenConfirmedKeeperStatus("idle");
+                      }}
+                      className="shrink-0 text-slate-400 hover:text-white"
+                      title="Dismiss"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M18 6L6 18M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+
+                  <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-slate-300">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-slate-500">Order</span>
+                      <span className="font-mono">
+                        {openConfirmedNotice.market} {openConfirmedNotice.side} {openConfirmedNotice.margin} zUSDC @ {openConfirmedNotice.leverage}x
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-slate-500">TxHash (openPosition)</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono break-all">{openConfirmedNotice.txHash}</span>
+                        <button
+                          type="button"
+                          onClick={() => copyText(openConfirmedNotice.txHash)}
+                          className="rounded-md border border-[#2c2f45] bg-[#121421] px-2 py-1 text-[11px] text-slate-300 hover:text-white"
+                          title="Copy txHash"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Keeper logs (recent)</span>
+                      <button
+                        type="button"
+                        onClick={() => copyText(openConfirmedKeeperLogs)}
+                        className="rounded-md border border-[#2c2f45] bg-[#121421] px-2 py-1 text-[11px] text-slate-300 hover:text-white disabled:opacity-50"
+                        disabled={!openConfirmedKeeperLogs}
+                        title="Copy keeper logs"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                    <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-xl border border-[#2c2f45] bg-black/20 p-3 text-[11px] text-slate-300">
+                      {openConfirmedKeeperLogs || "Waiting for logs…"}
+                    </pre>
+                  </div>
+                </div>
+              )}
+
               {txError && (
                 <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-rose-500/50 bg-rose-500/10 px-4 py-2.5 text-sm text-rose-400">
                   <span>{txError}</span>
@@ -1773,7 +2446,13 @@ export default function Trade() {
                   </div>
                   <div className="rounded-xl border border-[#363a59] bg-[#0d0f18] p-4">
                     <p className="text-[10px] uppercase text-slate-500">Liquidation</p>
-                    <p className="text-lg font-semibold text-rose-400">{formatForSymbol(previewLiquidationPrice, chartSymbol)}</p>
+                    <p className="text-lg font-semibold text-rose-400">
+                      {formatForSymbol(
+                        keeperOpenOrders.find((o) => o.market === chartSymbol && o.status === "Open")?.liquidationPrice
+                          ?? previewLiquidationPrice,
+                        chartSymbol,
+                      )}
+                    </p>
                   </div>
                 <div className="rounded-xl border border-[#363a59] bg-[#0d0f18] p-4">
                   <p className="text-[10px] uppercase text-slate-500">Size</p>
@@ -1785,16 +2464,62 @@ export default function Trade() {
                 <div className="grid gap-3 mb-4 md:grid-cols-2">
                   <div className="rounded-xl border border-[#363a59] bg-[#0d0f18] p-4">
                     <p className="text-[10px] uppercase text-slate-500">
-                      Take Profit ({targetPercent}%)
+                      Take Profit ({targetPercent}% {tpSlMode === "roi" ? "ROI" : "Price"})
                     </p>
-                    <p className="text-lg font-semibold text-emerald-400">{formatForSymbol(previewTakeProfitPrice, chartSymbol)}</p>
+                    <p className="text-lg font-semibold text-emerald-400">
+                      {formatForSymbol(
+                        keeperOpenOrders.find((o) => o.market === chartSymbol && o.status === "Open")?.takeProfitPrice
+                          ?? previewTakeProfitPrice,
+                        chartSymbol,
+                      )}
+                    </p>
                   </div>
                   <div className="rounded-xl border border-[#363a59] bg-[#0d0f18] p-4">
                     <p className="text-[10px] uppercase text-slate-500">
-                      Stop Loss ({stopLossPercent}%)
+                      Stop Loss ({stopLossPercent}% {tpSlMode === "roi" ? "ROI" : "Price"})
                     </p>
-                    <p className="text-lg font-semibold text-red-400">{formatForSymbol(previewStopLossPrice, chartSymbol)}</p>
+                    <p className="text-lg font-semibold text-red-400">
+                      {formatForSymbol(
+                        keeperOpenOrders.find((o) => o.market === chartSymbol && o.status === "Open")?.stopLossPrice
+                          ?? previewStopLossPrice,
+                        chartSymbol,
+                      )}
+                    </p>
                   </div>
+                </div>
+                <div className="mb-4 rounded-xl border border-[#363a59] bg-[#0d0f18] p-4">
+                  <p className="text-[10px] uppercase text-slate-500 mb-2">TP/SL mode</p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setTpSlMode("roi")}
+                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition ${
+                        tpSlMode === "roi"
+                          ? "bg-[#3d51ff] text-white"
+                          : "bg-[#121421] text-slate-400 hover:text-white border border-[#363a59]"
+                      }`}
+                      title="Percent means ROI on margin (price move = % / leverage)"
+                    >
+                      ROI %
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTpSlMode("price")}
+                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition ${
+                        tpSlMode === "price"
+                          ? "bg-[#3d51ff] text-white"
+                          : "bg-[#121421] text-slate-400 hover:text-white border border-[#363a59]"
+                      }`}
+                      title="Percent means raw price move"
+                    >
+                      Price %
+                    </button>
+                  </div>
+                  <p className="mt-2 text-[11px] text-slate-500">
+                    {tpSlMode === "roi"
+                      ? "ROI %: target is on margin. Price distance shrinks with leverage."
+                      : "Price %: target is on raw price move (independent of leverage)."}
+                  </p>
                 </div>
                   <div className="mb-4">
                     <div className="flex items-center justify-between text-xs text-slate-400">

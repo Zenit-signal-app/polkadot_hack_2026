@@ -5,18 +5,16 @@ import { createOrder, findOpenOrderByWalletAndMarket, updateTpSlByWalletAndMarke
 import { fetchPrices } from "./price.js";
 import { log } from "./logger.js";
 import type { Market, Side } from "./types.js";
+import { calcLiquidationPrice } from "../../shared/tradeMath.js";
 
 const TAG = "sync";
 
 const SIDE_MAP: Record<number, Side> = { 0: "Long", 1: "Short" };
 const VALID_MARKETS = new Set<string>(["BTCUSD", "ETHUSD", "DOTUSD"]);
 
-function calculateLiquidationPrice(entryPrice: number, leverage: number, side: Side): number {
-  const maintenanceMarginRate = 0.005;
-  if (side === "Long") {
-    return entryPrice * (1 - 1 / leverage + maintenanceMarginRate);
-  }
-  return entryPrice * (1 + 1 / leverage - maintenanceMarginRate);
+function estimateLiquidationPrice(entryPrice: number, leverage: number, side: Side): number {
+  const liq = calcLiquidationPrice(side, entryPrice, leverage, config.liquidationMmr);
+  return liq ?? 0;
 }
 
 const provider = new ethers.JsonRpcProvider(config.rpcUrl, {
@@ -93,9 +91,7 @@ export async function syncPositionFromChain(
       });
     }
 
-    const liquidationPrice = entryPrice > 0
-      ? calculateLiquidationPrice(entryPrice, leverage, side)
-      : 0;
+    const liquidationPrice = entryPrice > 0 ? estimateLiquidationPrice(entryPrice, leverage, side) : 0;
 
     const order = await createOrder({
       walletAddress: normalizedWallet,

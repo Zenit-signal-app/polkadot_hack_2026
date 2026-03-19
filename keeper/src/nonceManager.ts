@@ -29,13 +29,18 @@ export class NonceManager {
       this.mutex = this.mutex.then(async () => {
         try {
           if (this.currentNonce === null) {
-            this.currentNonce = await this.provider.getTransactionCount(
-              this.address,
-              "pending",
-            );
+            const [latest, pending] = await Promise.all([
+              this.provider.getTransactionCount(this.address, "latest"),
+              this.provider.getTransactionCount(this.address, "pending"),
+            ]);
+            // Some Polkadot EVM RPCs can return inconsistent "pending" counts.
+            // Use the max to avoid reusing a nonce that is already mined or queued.
+            this.currentNonce = Math.max(latest, pending);
             log.info(TAG, `Synced nonce from chain`, {
               address: this.address.slice(0, 10) + "...",
               nonce: this.currentNonce,
+              latest,
+              pending,
             });
           }
 
@@ -57,12 +62,15 @@ export class NonceManager {
     return new Promise<void>((resolve) => {
       this.mutex = this.mutex.then(async () => {
         try {
-          this.currentNonce = await this.provider.getTransactionCount(
-            this.address,
-            "pending",
-          );
+          const [latest, pending] = await Promise.all([
+            this.provider.getTransactionCount(this.address, "latest"),
+            this.provider.getTransactionCount(this.address, "pending"),
+          ]);
+          this.currentNonce = Math.max(latest, pending);
           log.warn(TAG, `Nonce reset – re-synced from chain`, {
             nonce: this.currentNonce,
+            latest,
+            pending,
           });
         } catch {
           this.currentNonce = null;

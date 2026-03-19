@@ -14,6 +14,6 @@ export const PERPETUAL_DEX_ABI = [
   { inputs: [{ name: "_market", type: "bytes32" }, { name: "_amount", type: "uint256" }], name: "increasePosition", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "_market", type: "bytes32" }, { name: "_amount", type: "uint256" }], name: "closePosition", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "_account", type: "address" }], name: "balanceOf", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
-  { inputs: [{ name: "user", type: "address" }, { name: "market", type: "bytes32" }], name: "getCurrentPosition", outputs: [{ components: [{ name: "amount", type: "uint256" }, { name: "position", type: "uint8" }, { name: "leverage", type: "uint8" }], type: "tuple" }], stateMutability: "view", type: "function" },
+  { inputs: [{ name: "user", type: "address" }, { name: "market", type: "bytes32" }], name: "getCurrentPosition", outputs: [{ components: [{ name: "amount", type: "uint256" }, { name: "position", type: "uint8" }, { name: "leverage", type: "uint8" }, { name: "entryPriceE18", type: "uint256" }], type: "tuple" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "getTokenAddress", outputs: [{ type: "address" }], stateMutability: "view", type: "function" },
 ] as const;

@@ -1,9 +1,11 @@
 import { config } from "./config.js";
 import { prisma } from "./db.js";
+import { reconcileOpenOrders } from "./db.js";
 import { processOpenPositions } from "./watcher.js";
 import { startEventListener, stopEventListener } from "./eventListener.js";
 import { getKeeperStatus } from "./executor.js";
 import { startApi } from "./api.js";
+import { startDbBackups } from "./backup.js";
 import { log } from "./logger.js";
 
 async function main() {
@@ -23,6 +25,38 @@ async function main() {
       error: err instanceof Error ? err.message : String(err),
     });
     process.exit(1);
+  }
+
+  // Ensure Open rows are unique + openKey is populated
+  try {
+    const { cancelled, backfilled } = await reconcileOpenOrders();
+    if (cancelled > 0 || backfilled > 0) {
+      log.info("db", "Reconciled Open orders", { cancelled, backfilled });
+    }
+  } catch (err) {
+    log.warn("db", "Failed to reconcile Open orders (non-fatal)", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Start rolling SQLite backups (best-effort)
+  if (config.sqliteDbPath) {
+    log.info("backup", "Starting DB backups", {
+      dbPath: config.sqliteDbPath,
+      backupDir: config.backupDir,
+      intervalMs: config.backupIntervalMs,
+      maxFiles: config.backupMaxFiles,
+    });
+    startDbBackups({
+      dbPath: config.sqliteDbPath,
+      backupDir: config.backupDir,
+      intervalMs: config.backupIntervalMs,
+      maxFiles: config.backupMaxFiles,
+    });
+  } else {
+    log.warn("backup", "SQLite path not resolved; backups disabled", {
+      databaseUrl: process.env.DATABASE_URL,
+    });
   }
 
   try {

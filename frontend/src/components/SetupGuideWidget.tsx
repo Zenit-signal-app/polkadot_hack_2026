@@ -4,7 +4,9 @@ import { ethers } from "ethers";
 const ZUSDC_ADDRESS = "0x277E42B9454fB36A7Eaa52D4cE332bEF71dd017a";
 const EXPLORER = "https://blockscout-testnet.polkadot.io";
 const YOUTUBE_LINK = "https://www.youtube.com/watch?v=tJ2measnTc0&list=RDtJ2measnTc0&start_radio=1";
-const RPC_URL = "https://eth-rpc-testnet.polkadot.io/";
+const RPC_URL =
+  import.meta.env.VITE_RPC_URL ||
+  "https://services.polkadothub-rpc.com/testnet/";
 const CHAIN_ID = 420420417;
 const FAUCET_AMOUNT = ethers.parseUnits("1000", 18);
 const COOLDOWN_KEY = "zenit:faucet:cooldown";

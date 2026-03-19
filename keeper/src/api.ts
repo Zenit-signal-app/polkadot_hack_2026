@@ -11,8 +11,21 @@ import {
 import { syncPositionFromChain } from "./syncPosition.js";
 import { checkCooldown, sendZUSDC } from "./faucet.js";
 import { log } from "./logger.js";
+import { getRecentLogs } from "./recentLogs.js";
+import { calcLiquidationPrice } from "../../shared/tradeMath.js";
+import { getCacheResetState } from "./cacheReset.js";
 
 const TAG = "api";
+
+function withComputedLiquidation<T extends { side: "Long" | "Short"; entryPrice: number; leverage: number; liquidationPrice: number }>(
+  order: T,
+): T {
+  const liq = calcLiquidationPrice(order.side, order.entryPrice, order.leverage, config.liquidationMmr);
+  return {
+    ...order,
+    liquidationPrice: liq ?? order.liquidationPrice,
+  };
+}
 
 export async function startApi(): Promise<void> {
   const app = Fastify({ logger: false });
@@ -35,7 +48,10 @@ export async function startApi(): Promise<void> {
     let keeperAddress = "0x0000000000000000000000000000000000000000";
     try {
       const { ethers } = await import("ethers");
-      const provider = new ethers.JsonRpcProvider(config.rpcUrl, { chainId: config.chainId });
+      const provider = new ethers.JsonRpcProvider(config.rpcUrl, {
+        chainId: config.chainId,
+        name: "polkadot-hub-testnet",
+      });
       const abi = ["function keeperAddress() view returns (address)"];
       const contract = new ethers.Contract(config.perpDexAddress as string, abi, provider);
       keeperAddress = await contract.keeperAddress();
@@ -80,9 +96,28 @@ export async function startApi(): Promise<void> {
     const limit = Math.min(Number(req.query.limit) || 100, 500);
 
     if (req.query.status === "Open") {
-      return getOpenOrders();
+      const orders = await getOpenOrders();
+      return orders.map(withComputedLiquidation);
     }
-    return getAllOrders(limit);
+    const orders = await getAllOrders(limit);
+    return orders.map(withComputedLiquidation);
+  });
+
+  // ─── GET /logs/recent — recent keeper logs (English) ───────────────────────
+  app.get<{ Querystring: { limit?: string } }>("/logs/recent", async (req) => {
+    const limit = Math.min(Number(req.query.limit) || 120, 400);
+    return getRecentLogs(limit);
+  });
+
+  // ─── GET /cache/reset — client cache reset signal per wallet ───────────────
+  app.get<{ Querystring: { wallet: string } }>("/cache/reset", async (req, reply) => {
+    const wallet = String((req.query as any)?.wallet ?? "").trim();
+    if (!wallet) {
+      reply.status(400);
+      return { error: "Missing querystring: wallet" };
+    }
+    const state = getCacheResetState(wallet);
+    return { wallet, ...state };
   });
 
   // ─── GET /orders/:id — get single order ────────────────────────────────────
@@ -93,7 +128,7 @@ export async function startApi(): Promise<void> {
       reply.status(404);
       return { error: "Order not found" };
     }
-    return order;
+    return withComputedLiquidation(order as any);
   });
 
   // ─── PUT /orders/:id/tp-sl — update TP/SL by order ID ─────────────────────
