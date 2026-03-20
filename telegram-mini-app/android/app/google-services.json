@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "1061098133475",
+    "project_id": "zenit-cc73c",
+    "storage_bucket": "zenit-cc73c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1061098133475:android:2d323ba6c7aaad2f7c72d6",
+        "android_client_info": {
+          "package_name": "com.vistia.zenit"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1061098133475-oeg2k6d72kah651cf27sg95n59o4tim4.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.vistia.zenit",
+            "certificate_hash": "7ff930e947d0ecca49e4fba6a22536033dab3362"
+          }
+        },
+        {
+          "client_id": "1061098133475-tajhvbqc0g0sqabjblcc2jecb54sisfv.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB00758y8LDE5r4F15jQrNSjEcAwNLHC_A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1061098133475-tajhvbqc0g0sqabjblcc2jecb54sisfv.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "1061098133475-9h3ad9jekho3u65o3dq047roo0v972ej.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.vistia.zenit-apps"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
